@@ -1,0 +1,48 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace ShortBus.Persistence {
+
+
+
+
+    /// <summary>
+    /// Operations required to perist a message to local storage
+    /// </summary>
+    public interface IPersist {
+
+        bool DBExists { get; }
+        bool CollectionExists { get; }
+
+
+        void Persist(IEnumerable<PersistedMessage> messages);
+
+        
+        PersistedMessage PeekNext(string q);
+
+        PersistedMessage PeekAndMarkNext(string q);
+
+        PersistedMessage Mark(Guid id);
+
+        PersistedMessage Processing(Guid id);
+
+        PersistedMessage Pop(Guid Id);
+
+        PersistedMessage Reschedule(Guid id, TimeSpan fromNow);
+
+        void UnMarkAll();
+        void UnMarkAll(string q);
+        bool ServiceIsDown();
+
+        
+        bool ResetConnection();
+
+
+
+    }
+
+
+}
