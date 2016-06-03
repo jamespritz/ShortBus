@@ -10,14 +10,18 @@ namespace PublisherDemo {
         static void Main(string[] args) {
             Console.WriteLine("Welcome to Publisher Demo");
 
-            using (IDisposable app = WebApp.Start<ShortBus.Hosting.WebAPI.HostConfiguration>(url: @"http://192.168.1.13:9876")) {
+            string endPointAddress = System.Configuration.ConfigurationManager.AppSettings["endPointAddress"];
+            string mongoAddress = System.Configuration.ConfigurationManager.AppSettings["mongoAddress"];
+
+
+            using (IDisposable app = WebApp.Start<ShortBus.Hosting.WebAPI.HostConfiguration>(url:endPointAddress)) {
 
 
                 ShortBus.Bus.Configure
                     .AsAPublisher
                     .MaxThreads(4)
                     .Default(new ShortBus.Default.DefaultPublisherSettings() {
-                        MongoConnectionString = @"mongodb://127.0.0.1:27017"
+                        MongoConnectionString = mongoAddress
                     });
                 ShortBus.Bus.Start();
 

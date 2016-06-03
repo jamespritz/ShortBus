@@ -12,12 +12,70 @@ using Newtonsoft.Json.Linq;
 using System.Collections.Concurrent;
 using ShortBus.Default;
 using ShortBus.Subscriber;
+using System.Transactions;
 
 namespace ShortBus {
+
+    class TxRM : IEnlistmentNotification {
+
+        public TxRM() { }
+
+        private IEnumerable<PersistedMessage> messages = null;
+        private IPersist persistor = null;
+        private string txId = string.Empty;
+        private Task whenDone = null;
+
+        public void SendMessage(IEnumerable<PersistedMessage> messages, IPersist persistor, Task whenDone) {
+
+            Transaction currentTx = Transaction.Current;
+            if (currentTx != null) {
+
+                txId = currentTx.TransactionInformation.LocalIdentifier;
+                this.persistor = persistor;
+                this.messages = messages;
+                currentTx.EnlistVolatile(this, EnlistmentOptions.None);
+                this.whenDone = whenDone;
+
+            } else {
+                persistor.Persist(messages);
+                whenDone.Start();
+            }
+
+        }
+
+        void IEnlistmentNotification.Commit(Enlistment enlistment) {
+            persistor.CommitBatch(this.txId);
+            enlistment.Done();
+            whenDone.Start();
+        }
+
+        void IEnlistmentNotification.InDoubt(Enlistment enlistment) {
+            enlistment.Done();
+        }
+
+        void IEnlistmentNotification.Prepare(PreparingEnlistment preparingEnlistment) {
+
+            foreach (PersistedMessage m in messages) {
+                m.Status = PersistedMessageStatusOptions.Uncommitted;
+                m.TransactionID = this.txId;
+            }
+            persistor.Persist(messages);
+            
+            preparingEnlistment.Prepared();
+
+        }
+
+        void IEnlistmentNotification.Rollback(Enlistment enlistment) {
+            //don't need to do anything, the messages are not marked for processing
+            //errr. i guess we could delete them
+            enlistment.Done();
+        }
+    }
+
     public class Bus {
 
       
-
+        //#TODO - Define Event Args for Bus Events, possibly create more specic events
         public delegate void BusStarted(object sender, EventArgs args);
         public static event BusStarted OnStarted;
         public delegate void BusProcessing(object sender, EventArgs args);
@@ -27,6 +85,8 @@ namespace ShortBus {
         public delegate void ThreadStarted(object sender, EventArgs args);
         public static event ThreadStarted OnThreadStarted;
 
+        //Lets the subscriber know to restart processing after a new subscription is created
+        //Timer the handler for new subscriptions will start the timer to restart processing
         private static volatile bool newSubscribers = false;
         private static System.Timers.Timer restartTimer = new System.Timers.Timer();
 
@@ -37,24 +97,32 @@ namespace ShortBus {
 
         }
 
+        //Fluent configuration
         private static Configure configure;
         public static IConfigure Configure { get { return (IConfigure)configure; } }
 
 
-
+        //Each node must have a unique name... defaults to assembly name, but
+        //can be overridden
         public static string ApplicationName {
             get {
                 return ((IConfigure)configure).ApplicationName;
             }
         }
 
+        //synchronization mechanism
         struct pubStat {
             public bool Has { get; set; }
             public bool Processing { get; set; }
         }
 
 
-
+        /// <summary>
+        /// Processes all subscription requests.  Subscription requests are sent to the
+        /// publisher as normal messages, and processed as such.
+        /// A subscription request will stop all processing to allow the new subscription
+        /// to be registered, then the Bus will restart processing.
+        /// </summary>
         class SubscriptionSubscriber : IEndPoint {
             EndpointResponse IEndPoint.HelloWorld(PersistedMessage message) {
                 return new EndpointResponse() { Status = true, PayLoad = null };
@@ -185,6 +253,7 @@ namespace ShortBus {
    
             }
 
+            //running in process
             bool IEndPoint.ResetConnection() {
                 return true;
             }
@@ -194,6 +263,13 @@ namespace ShortBus {
             }
         }
 
+        //all messages are processed by incoming date/time.  Since it may be
+        //possible that two messages have same date/time, each messages is given
+        //an ordinal when first persisted. Bus will sort by date/time and ordinal to
+        //ensure messages are processed in the order they were taken.
+        //ordinal is reset to zero if more than 5 seconds have passed.
+        private static int ordinal = 0;
+        private static DateTime padTime = DateTime.Now;
         private static int SyncGetPadding() {
 
             lock (sourceLock) {
@@ -208,14 +284,15 @@ namespace ShortBus {
             return ordinal;
         }
 
+
+        //syncronization mechanism
         private readonly static object sourceLock = new object();
         private static CancellationTokenSource CTS = null;
         private static bool stopped = true;
         private static bool stopping = false;
-        private static int ordinal = 0;
-        private static DateTime padTime = DateTime.Now;
         private static ManualResetEvent allStopped = new ManualResetEvent(true);
 
+        
         private static void ResolvePersistedConfig() {
             if (configure.IsASource) {
                 
@@ -586,24 +663,47 @@ namespace ShortBus {
                     throw new ServiceEndpointDownException("Message Peristor is Down");
                 }
 
-                configure.source_LocalStorage.Persist(messages);
-                foreach (MessageTypeMapping m in publishers) {
-                    publishersRunning.AddOrUpdate(m.EndPointName, new pubStat() { Has = true, Processing = false }, (k, v) => {
+                Task whenDone = new Task((p) => {
+                    IEnumerable<MessageTypeMapping> pubs = ((IEnumerable<MessageTypeMapping>)p);
 
-                        if (!v.Processing) {
-                            return new pubStat() { Has = true, Processing = false };
-                        } else {
-                            return v;
-                        }
-                    });
-                }
+                    foreach (MessageTypeMapping m in pubs) {
+                        publishersRunning.AddOrUpdate(m.EndPointName, new pubStat() { Has = true, Processing = false }, (k, v) => {
+
+                            if (!v.Processing) {
+                                return new pubStat() { Has = true, Processing = false };
+                            } else {
+                                return v;
+                            }
+                        });
+                    }
+
+                    StartProcessingSource();
+
+                }, publishers);
+
+                TxRM rm = new TxRM();
+                
+                rm.SendMessage(messages, configure.source_LocalStorage, whenDone);
+
+                
+                
+                //foreach (MessageTypeMapping m in publishers) {
+                //    publishersRunning.AddOrUpdate(m.EndPointName, new pubStat() { Has = true, Processing = false }, (k, v) => {
+
+                //        if (!v.Processing) {
+                //            return new pubStat() { Has = true, Processing = false };
+                //        } else {
+                //            return v;
+                //        }
+                //    });
+                //}
 
 
             } catch (Exception) {
                 throw;
             }
 
-            StartProcessingSource();
+            
 
 
         }

@@ -29,7 +29,7 @@ namespace ShortBus.Hosting.WebAPI {
 
         }
 
-
+        [HttpGet]
         public string GetMessage(int id) {
             return "hello";
         }

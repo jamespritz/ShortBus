@@ -15,16 +15,20 @@ namespace SubscriberDemo {
         static void Main(string[] args) {
             Console.WriteLine("Welcome to Subscriber Demo");
 
-            using (IDisposable app = WebApp.Start<ShortBus.Hosting.WebAPI.HostConfiguration>(url: @"http://192.168.1.13:9875")) {
+            string endPointAddress = System.Configuration.ConfigurationManager.AppSettings["endPointAddress"];
+            string mongoAddress = System.Configuration.ConfigurationManager.AppSettings["mongoAddress"];
+            string pubEndPointAddress = System.Configuration.ConfigurationManager.AppSettings["pubEndPointAddress"];
+
+            using (IDisposable app = WebApp.Start<ShortBus.Hosting.WebAPI.HostConfiguration>(url: endPointAddress)) {
 
                 ShortBus.Bus.Configure
                     .AsASubscriber
                     .MaxThreads(4)
                     .Default(new ShortBus.Default.DefaultSubscriberSettings() {
-                        MongoConnectionString = @"mongodb://127.0.0.1:27017"
+                        MongoConnectionString = mongoAddress
                         , Endpoint = new ShortBus.Default.RESTSettings() {
-                            URL = @"http://192.168.1.13:9875"
-                        }, Publisher = new ShortBus.Default.RESTSettings() { URL = @"http://192.168.1.13:9876" }
+                            URL = endPointAddress
+                        }, Publisher = new ShortBus.Default.RESTSettings() { URL = pubEndPointAddress }
                     })
                 .RegisterSubscription<ShortBus.TestMessage>("Default")
                 .RegisterMessageHandler<ShortBus.TestMessage>(new TestHandler());
@@ -52,7 +56,7 @@ namespace SubscriberDemo {
         bool IMessageHandler.Parallel {
             get {
 
-                return true;
+                return false;
             }
         }
     }

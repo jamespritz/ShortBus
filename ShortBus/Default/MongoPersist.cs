@@ -234,6 +234,29 @@ namespace ShortBus.Default {
 
         }
 
+        void IPersist.CommitBatch(string transactionID) {
+            if (this.serviceDown) {
+                throw new ServiceEndpointDownException("Mongo Persist Service is Down");
+            }
+
+            IMongoCollection<PersistedMessage> collection = this.GetCollection();
+
+
+
+            try {
+                FilterDefinitionBuilder<PersistedMessage> fBuilder = Builders<PersistedMessage>.Filter;
+
+                var qfilter = fBuilder.And(fBuilder.Eq(g => g.Status, PersistedMessageStatusOptions.Uncommitted), fBuilder.Eq(g => g.TransactionID, transactionID));
+                var update = Builders<PersistedMessage>.Update.Set(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess);
+
+                collection.UpdateMany(qfilter, update);
+
+            } catch (Exception e) {
+                this.serviceDown = true;
+                throw new ServiceEndpointDownException("Mongo Persist Service is Down", e);
+            }
+        }
+
         void IPersist.UnMarkAll(string q) {
             if (this.serviceDown) {
                 throw new ServiceEndpointDownException("Mongo Persist Service is Down");

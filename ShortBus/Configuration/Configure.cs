@@ -15,7 +15,8 @@ using System.Threading.Tasks;
 
 namespace ShortBus.Configuration {
 
-   
+
+
     public interface IConfigure {
 
         /// <summary>

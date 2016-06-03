@@ -16,11 +16,51 @@ using System.Web;
 using Microsoft.Owin.Hosting;
 using ShortBus.Default;
 using ShortBus.Subscriber;
+using System.Transactions;
 
 namespace Sandbox {
 
 
 
+    public class txTest : System.Transactions.IEnlistmentNotification {
+
+        public txTest() { }
+
+        public void SaveChanges() {
+
+            Transaction currentTx = Transaction.Current;
+            if (currentTx != null) {
+                Console.WriteLine("Enlisting");
+                currentTx.EnlistVolatile(this, EnlistmentOptions.None);
+            }
+
+            Console.Write("Saving");
+        }
+
+        void IEnlistmentNotification.Commit(Enlistment enlistment) {
+            Console.WriteLine("committed");
+            enlistment.Done();
+        }
+
+        void IEnlistmentNotification.InDoubt(Enlistment enlistment) {
+            Console.WriteLine("In Doubt");
+            enlistment.Done();
+        }
+
+        void IEnlistmentNotification.Prepare(PreparingEnlistment preparingEnlistment) {
+            
+            Console.WriteLine("Preparing");
+            preparingEnlistment.Prepared();
+            
+        
+
+        }
+
+        void IEnlistmentNotification.Rollback(Enlistment enlistment) {
+            Console.WriteLine("rolling back");
+            enlistment.Done();
+        }
+    }
 
 
 
@@ -28,13 +68,13 @@ namespace Sandbox {
 
 
         static void Main(string[] args) {
-        
-            
+
+
 
             //TestSerialization();
             TestPublish();
             //TestMultiThread();
-   
+            //TestTx();
             //TestSerialization();
 
             //for (int i = 0; i < 1000; i++) {
@@ -48,6 +88,18 @@ namespace Sandbox {
 
             Console.ReadKey();
 
+        }
+
+        private static void TestTx() {
+            txTest t = new txTest();
+            using (System.Transactions.TransactionScope scope = new TransactionScope(TransactionScopeOption.Required)) {
+
+                
+                t.SaveChanges();
+                scope.Complete();
+
+                
+            }
         }
 
         private static void TestPersistConfig() {
@@ -227,7 +279,7 @@ namespace Sandbox {
                     MongoConnectionString = @"mongodb://127.0.0.1:27017"
 
                     , PublisherSettings = new ShortBus.Default.RESTSettings() {
-                        URL = @"http://192.168.1.13:9876"
+                        URL = @"http://192.168.1.7:9876"
                     }
                 }).RegisterMessage<ShortBus.TestMessage>("Default")
             .MaxThreads(4);
@@ -257,7 +309,14 @@ namespace Sandbox {
                     for (int z = 0; z < cnt; z++) {
 
                         try {
-                            Bus.SendMessage<ShortBus.TestMessage>(new TestMessage() { Property = z.ToString() });
+
+                            using (TransactionScope scope = new TransactionScope(TransactionScopeOption.Required)) {
+
+
+                                Bus.SendMessage<ShortBus.TestMessage>(new TestMessage() { Property = z.ToString() });
+                                
+
+                            }
                         } catch (Exception e) {
                             Console.WriteLine("errr.. {0}", e.Message);
                         }

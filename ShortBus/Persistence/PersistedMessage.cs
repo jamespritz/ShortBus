@@ -8,6 +8,7 @@ namespace ShortBus.Persistence {
 
     
     public enum PersistedMessageStatusOptions {
+        Uncommitted = -1,
         ReadyToProcess = 0,
         Marked = 1,
         Processing = 2,
@@ -37,7 +38,7 @@ namespace ShortBus.Persistence {
         public string Subscriber { get; set; }
         public string MessageHandler { get; set; }
         public int Ordinal { get; set; }
-
+        public string TransactionID { get; set; }
         public string MessageType { get;set; }
 
         /// <summary>
@@ -65,6 +66,7 @@ namespace ShortBus.Persistence {
                 , Status = this.Status
                 , Subscriber = this.Subscriber
                 , Queue = this.Queue
+                , TransactionID = this.TransactionID
                 , Received = this.Received
             };
 

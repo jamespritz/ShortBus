@@ -33,6 +33,8 @@ namespace ShortBus.Persistence {
 
         PersistedMessage Reschedule(Guid id, TimeSpan fromNow);
 
+        void CommitBatch(string transactionID);
+
         void UnMarkAll();
         void UnMarkAll(string q);
         bool ServiceIsDown();
