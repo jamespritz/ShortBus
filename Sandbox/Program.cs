@@ -314,7 +314,7 @@ namespace Sandbox {
 
 
                                 Bus.SendMessage<ShortBus.TestMessage>(new TestMessage() { Property = z.ToString() });
-                                
+                                scope.Complete();
 
                             }
                         } catch (Exception e) {

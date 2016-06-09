@@ -88,8 +88,9 @@ namespace ShortBus {
         //Lets the subscriber know to restart processing after a new subscription is created
         //Timer the handler for new subscriptions will start the timer to restart processing
         private static volatile bool newSubscribers = false;
-        private static System.Timers.Timer restartTimer = new System.Timers.Timer();
-
+        private static System.Timers.Timer publisherRestartTimer = new System.Timers.Timer();
+        private static System.Timers.Timer subscriberRestartTimer = null;
+        
 
         static Bus() {
 
@@ -383,13 +384,17 @@ namespace ShortBus {
 
             
             if (AllThreadsAreStopped()) {
+                
                 if (stopping) {
                     allStopped.Set();
-                } else {
-                    if (newSubscribers && restartTimer != null) {
+                } else { //if we are stopping the bus, don't restart the threads... that would be silly!
+                    if (newSubscribers && publisherRestartTimer != null) {
                         newSubscribers = false;
 
-                        restartTimer.Start();
+                        publisherRestartTimer.Start();
+                    }
+                    if (subscriberRestartTimer != null) {
+                        subscriberRestartTimer.Start();
                     }
                 }
             }
@@ -524,10 +529,10 @@ namespace ShortBus {
                 //unlocks all messages that may have failed
                 configure.publisher_LocalStorage.UnMarkAll();
 
-                restartTimer.AutoReset = false;
-                restartTimer.Interval = 1000;
-                restartTimer.Enabled = true;
-                restartTimer.Elapsed += RestartPublisher;
+                publisherRestartTimer.AutoReset = false;
+                publisherRestartTimer.Interval = 1000;
+                publisherRestartTimer.Enabled = true;
+                publisherRestartTimer.Elapsed += RestartPublisher;
 
                 //StartProcessingPublisher();
             }
@@ -582,7 +587,14 @@ namespace ShortBus {
                 });
 
                 configure.subscriber_LocalStorage.UnMarkAll();
-                StartProcessingSubscriber();
+
+                subscriberRestartTimer = new System.Timers.Timer();
+                subscriberRestartTimer.AutoReset = false;
+                subscriberRestartTimer.Interval = 5000;
+                subscriberRestartTimer.Enabled = true;
+                subscriberRestartTimer.Elapsed += RestartSubscriber;
+
+                //StartProcessingSubscriber();
             }
 
 
