@@ -40,7 +40,10 @@ namespace ShortBus.Default {
             this.ImDown = false;
             return this.ImDown;
         }
-
+        bool IEndPoint.ResetConnection(string endPointAddress) {
+            this.settings.URL = endPointAddress;
+            return ((IEndPoint)this).ResetConnection();
+        }
 
         bool IEndPoint.ServiceIsDown() {
             return this.ImDown;
@@ -54,6 +57,8 @@ namespace ShortBus.Default {
             EndpointResponse toReturn = new EndpointResponse() { PayLoad = null, Status = false };
             try {
                 string url = settings.URL + string.Format(@"/api/message/{0}", command);
+
+                url = url.ToLower().Replace("localhost", Util.Util.GetLocalIP());
 
                 HttpWebRequest req = (HttpWebRequest)HttpWebRequest.Create(new Uri(url));
                 //req.ContentType = @"application/x-www-form-urlencoded";

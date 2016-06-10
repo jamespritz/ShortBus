@@ -8,5 +8,6 @@ namespace ShortBus.Configuration {
     public class MessageTypeMapping {
         public string TypeName { get; set; }
         public string EndPointName { get; set; }
+        public bool DiscardIfDown { get; set; }
     }
 }

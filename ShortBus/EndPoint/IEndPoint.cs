@@ -42,6 +42,7 @@ namespace ShortBus.Publish {
         /// </summary>
         /// <returns></returns>
         bool ResetConnection();
+        bool ResetConnection(string endpointAddress);
 
 
     }

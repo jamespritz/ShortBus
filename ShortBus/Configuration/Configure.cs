@@ -32,13 +32,14 @@ namespace ShortBus.Configuration {
         /// </remarks>
         ISourceConfigure AsASource { get; }
         IPublisherConfigure AsAPublisher { get; }
-        ISubsciberConfigure AsASubscriber { get; }
+        ISubscriberConfigure AsASubscriber { get; }
 
         string ApplicationName { get; }
 
         string ApplicationGUID { get; }
         IConfigure DisableStartupTests();
         IConfigure SetApplicationName(string appName);
+        IConfigure SetApplicationGUID(string appGUID);
 
         bool IsASource { get; }
         bool IsAPublisher { get; }
@@ -62,17 +63,17 @@ namespace ShortBus.Configuration {
         IPublisherConfigure RegisterSubscriber(string subscriberName, IEndPoint subscriber);
 
         IPublisherConfigure MaxThreads(int threadCount);
-        IPublisherConfigure RegisterMessage<T>(string subscriberName);
+        IPublisherConfigure RegisterMessage<T>(string subscriberName, bool discardIfSubscriberIsDown);
 
 
     }
     internal interface IPublisherConfigureInternal {
-        void RegisterMessage(string typeName, string subscriberName);
+        void RegisterMessage(string typeName, string subscriberName, bool discardIfDown);
     }
 
 
-    public interface ISubsciberConfigure {
-        ISubsciberConfigure Default(DefaultSubscriberSettings settings);
+    public interface ISubscriberConfigure {
+        ISubscriberConfigure Default(DefaultSubscriberSettings settings);
 
         /// <summary>
         /// Map incoming message type to the handler that processes the message
@@ -80,7 +81,7 @@ namespace ShortBus.Configuration {
         /// <param name="handler"></param>
         /// <param name="messageTypeName"></param>
         /// <returns></returns>
-        ISubsciberConfigure RegisterMessageHandler<T>(IMessageHandler handler);
+        ISubscriberConfigure RegisterMessageHandler<T>(IMessageHandler handler);
 
         /// <summary>
         /// Register the publishers from which I expect to recieve messages.
@@ -88,7 +89,7 @@ namespace ShortBus.Configuration {
         /// <param name="publisherName"></param>
         /// <param name="publisher"></param>
         /// <returns></returns>
-        ISubsciberConfigure RegisterPublisher(string publisherName, IEndPoint publisher);
+        ISubscriberConfigure RegisterPublisher(string publisherName, IEndPoint publisher);
 
         /// <summary>
         /// Tell the publisher to send messages my way.
@@ -97,12 +98,12 @@ namespace ShortBus.Configuration {
         /// <param name="messageTypeName"></param>
         /// <param name="publisherName"></param>
         /// <returns></returns>
-        ISubsciberConfigure RegisterSubscription<T>(string publisherName);
+        ISubscriberConfigure RegisterSubscription<T>(string publisherName, bool discardIfSubscriberIsDown);
 
-        ISubsciberConfigure MaxThreads(int threadCount);
+        ISubscriberConfigure MaxThreads(int threadCount);
     }
 
-    internal class Configure : IConfigure, ISourceConfigure, IPublisherConfigure, ISubsciberConfigure, IPublisherConfigureInternal {
+    internal class Configure : IConfigure, ISourceConfigure, IPublisherConfigure, ISubscriberConfigure, IPublisherConfigureInternal {
 
         internal Configure() {
 
@@ -112,7 +113,7 @@ namespace ShortBus.Configuration {
 
         private bool testOnStartup = true;
         private string applicationName = string.Empty;
-        private bool appNameManual = false;
+        private string appGUID = string.Empty;
 
         private bool IAmASource = false;
         private bool IAmAPublisher = false;
@@ -137,11 +138,19 @@ namespace ShortBus.Configuration {
                 throw new ArgumentException("appName not provided");
             }
             this.applicationName = appName.Replace(" ", "");
-            this.appNameManual = true;
+      
 
             return (IConfigure)this;
         }
+        IConfigure IConfigure.SetApplicationGUID(string GUID) {
+            if (string.IsNullOrEmpty(GUID)) {
+                throw new ArgumentException("app GUID not provided");
+            }
+            this.appGUID = GUID;
 
+
+            return (IConfigure)this;
+        }
         public string ApplicationName {
             get {
 
@@ -153,9 +162,12 @@ namespace ShortBus.Configuration {
             }
         }
 
-        string IConfigure.ApplicationGUID {
+        public string ApplicationGUID {
             get {
-                return Util.Util.GetApplicationGuid();
+                if (string.IsNullOrEmpty(this.appGUID)) {
+                    this.appGUID = Util.Util.GetApplicationGuid();
+                }
+                return this.appGUID;
             }
         }
 
@@ -239,7 +251,7 @@ namespace ShortBus.Configuration {
             string typeName = ShortBus.Util.Util.GetTypeName(typeof(T)).ToLower();
 
             if (!this.Messages.Any(c => c.TypeName.Equals(typeName, StringComparison.OrdinalIgnoreCase) && c.EndPointName.Equals(publisherName, StringComparison.OrdinalIgnoreCase))) {
-                this.Messages.Add(new MessageTypeMapping() { TypeName = typeName, EndPointName = publisherName });
+                this.Messages.Add(new MessageTypeMapping() { TypeName = typeName, EndPointName = publisherName, DiscardIfDown = false });
             }
 
             return (ISourceConfigure)this;
@@ -321,15 +333,15 @@ namespace ShortBus.Configuration {
             return ((IPublisherConfigure)this);
         }
 
-        void IPublisherConfigureInternal.RegisterMessage(string typeName, string subscriberName) {
-            this.Subscriptions.Add(new MessageTypeMapping() { EndPointName = subscriberName, TypeName = typeName.ToLower() });
+        void IPublisherConfigureInternal.RegisterMessage(string typeName, string subscriberName, bool discardIfDown) {
+            this.Subscriptions.Add(new MessageTypeMapping() { EndPointName = subscriberName, TypeName = typeName.ToLower(), DiscardIfDown = discardIfDown });
        
         }
 
-        IPublisherConfigure IPublisherConfigure.RegisterMessage<T>(string subscriberName) {
+        IPublisherConfigure IPublisherConfigure.RegisterMessage<T>(string subscriberName, bool discardIfSubscriberIsDown) {
 
             string typeName = Util.Util.GetTypeName(typeof(T)).ToLower();
-            this.Subscriptions.Add(new MessageTypeMapping() { EndPointName = subscriberName, TypeName = typeName });
+            this.Subscriptions.Add(new MessageTypeMapping() { EndPointName = subscriberName, TypeName = typeName, DiscardIfDown = discardIfSubscriberIsDown });
             return (IPublisherConfigure)this;
         }
 
@@ -349,10 +361,10 @@ namespace ShortBus.Configuration {
             }
         }
         internal string endPointAddress { get; set; }
-        ISubsciberConfigure IConfigure.AsASubscriber {
+        ISubscriberConfigure IConfigure.AsASubscriber {
             get {
                 this.IAmASubscriber = true;
-                return (ISubsciberConfigure)this;
+                return (ISubscriberConfigure)this;
             }
         }
 
@@ -361,12 +373,12 @@ namespace ShortBus.Configuration {
         internal Dictionary<string, IMessageHandler> Handlers;
         
 
-        ISubsciberConfigure ISubsciberConfigure.MaxThreads(int threads) {
+        ISubscriberConfigure ISubscriberConfigure.MaxThreads(int threads) {
             this.MaxSubscriberThreads = threads;
-            return (ISubsciberConfigure)this;
+            return (ISubscriberConfigure)this;
         }
 
-        ISubsciberConfigure ISubsciberConfigure.Default(DefaultSubscriberSettings settings) {
+        ISubscriberConfigure ISubscriberConfigure.Default(DefaultSubscriberSettings settings) {
             MongoPersistSettings dbSettings = new MongoPersistSettings() {
                 ConnectionString = settings.MongoConnectionString
                 , Collection = "subscribe"
@@ -385,30 +397,30 @@ namespace ShortBus.Configuration {
             Publishers.Add("Default", new RESTEndPoint(settings.Publisher));
             
 
-            return (ISubsciberConfigure)this;
+            return (ISubscriberConfigure)this;
         }
 
-        public ISubsciberConfigure RegisterMessageHandler<T>(IMessageHandler handler) {
+        public ISubscriberConfigure RegisterMessageHandler<T>(IMessageHandler handler) {
             //handlers
             string messageTypeName = Util.Util.GetTypeName(typeof(T)).ToLower();
             if (this.Handlers == null) { this.Handlers = new Dictionary<string, IMessageHandler>(); }
             this.Handlers.Add(messageTypeName, handler);
-            return (ISubsciberConfigure)this;
+            return (ISubscriberConfigure)this;
         }
 
-        public ISubsciberConfigure RegisterPublisher(string publisherName, IEndPoint publisher) {
+        public ISubscriberConfigure RegisterPublisher(string publisherName, IEndPoint publisher) {
             //publishers
             if (Publishers == null) { Publishers = new Dictionary<string, IEndPoint>(); }
             Publishers.Add(publisherName, publisher);
-            return (ISubsciberConfigure)this;
+            return (ISubscriberConfigure)this;
         }
 
-        public ISubsciberConfigure RegisterSubscription<T>( string publisherName) {
+        public ISubscriberConfigure RegisterSubscription<T>( string publisherName, bool discardIfSubscriberDown) {
             //subscriptions
             string messageTypeName = Util.Util.GetTypeName(typeof(T)).ToLower();
             if (Subscriptions == null) Subscriptions = new List<MessageTypeMapping>();
-            Subscriptions.Add(new MessageTypeMapping() { EndPointName = publisherName, TypeName = messageTypeName });
-            return (ISubsciberConfigure)this;
+            Subscriptions.Add(new MessageTypeMapping() { EndPointName = publisherName, TypeName = messageTypeName, DiscardIfDown = discardIfSubscriberDown });
+            return (ISubscriberConfigure)this;
         }
 
 

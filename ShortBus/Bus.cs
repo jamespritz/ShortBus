@@ -203,10 +203,18 @@ namespace ShortBus {
                     if (!subscriberStored) {
                         stored.Subscribers.Add(request.SubscriberName, request.EndPoint);
                         changed = true;
+                    } else {
+                        //if subscriber stored... make sure the endpoint is the same...
+                        KeyValuePair<string, string> match = stored.Subscribers.FirstOrDefault(g => g.Key.Equals(request.SubscriberName, StringComparison.OrdinalIgnoreCase));
+                        if (!match.Value.Equals(request.EndPoint, StringComparison.OrdinalIgnoreCase)) {
+                            stored.Subscribers.Remove(request.SubscriberName);
+                            stored.Subscribers.Add(request.SubscriberName, request.EndPoint);
+                            changed = true;
+                        }
                     }
                     if (!subscriptionStored) {
                         
-                        stored.Subscriptions.Add(new MessageTypeMapping() { EndPointName = request.SubscriberName, TypeName = request.MessageTypeName });
+                        stored.Subscriptions.Add(new MessageTypeMapping() { EndPointName = request.SubscriberName, TypeName = request.MessageTypeName, DiscardIfDown = request.DiscardIfSubscriberIsDown });
                         changed = true;
                     }
                     if (changed) {
@@ -214,7 +222,17 @@ namespace ShortBus {
                     }
 
 
-                    //if no other subscriptions, remove subscriber
+                    //if subscriber not registered, add it
+                    IEndPoint registeredSubscriber = configure.Subscribers.FirstOrDefault(g => g.Key.Equals(request.SubscriberName, StringComparison.OrdinalIgnoreCase)).Value;
+                    if (registeredSubscriber == null) {
+                        IEndPoint toAdd = new RESTEndPoint(new RESTSettings() { URL = request.EndPoint });
+
+                        ((IPublisherConfigure)configure).RegisterSubscriber(request.SubscriberName, toAdd);
+
+                        subscribersRunning.AddOrUpdate(request.SubscriberName, new pubStat() { Has = true, Processing = false }, (r, z) => { return new pubStat() { Has = true, Processing = false }; });
+
+                    } 
+
                     if (!configure.Subscribers.Any(g => g.Key.Equals(request.SubscriberName, StringComparison.OrdinalIgnoreCase))) {
                         IEndPoint toAdd = new RESTEndPoint(new RESTSettings() { URL = request.EndPoint });
 
@@ -227,24 +245,24 @@ namespace ShortBus {
 
                     MessageTypeMapping c = configure.Subscriptions.FirstOrDefault(g => g.EndPointName.Equals(request.SubscriberName, StringComparison.OrdinalIgnoreCase) && g.TypeName.Equals(request.MessageTypeName, StringComparison.OrdinalIgnoreCase));
                     if (c == null) {
-                        ((IPublisherConfigureInternal)configure).RegisterMessage(request.MessageTypeName, request.SubscriberName);
+                        ((IPublisherConfigureInternal)configure).RegisterMessage(request.MessageTypeName, request.SubscriberName, request.DiscardIfSubscriberIsDown);
                         
                     }
 
                     //if the endpoint was down, reset it (since we now know its up)
                     IEndPoint subscriber = configure.Subscribers.FirstOrDefault(g => g.Key.Equals(request.SubscriberName, StringComparison.OrdinalIgnoreCase)).Value;
-                    if (subscriber.ServiceIsDown()) {
-                        subscriber.ResetConnection();
-                        //unmark all messages so bus resends
-                        configure.publisher_LocalStorage.UnMarkAll(request.SubscriberName);
+                   
+                    subscriber.ResetConnection(request.EndPoint);
+                    //unmark all messages so bus resends
+                    configure.publisher_LocalStorage.UnMarkAll(request.SubscriberName);
 
 
-                        subscribersRunning.AddOrUpdate(request.SubscriberName, new pubStat() { Has = true, Processing = false }, (k, v) => {
-                            return new pubStat() { Has = true, Processing = false };
-                        });
+                    subscribersRunning.AddOrUpdate(request.SubscriberName, new pubStat() { Has = true, Processing = false }, (k, v) => {
+                        return new pubStat() { Has = true, Processing = false };
+                    });
 
 
-                    }
+              
 
                     newSubscribers = true;
 
@@ -256,6 +274,9 @@ namespace ShortBus {
 
             //running in process
             bool IEndPoint.ResetConnection() {
+                return true;
+            }
+            bool IEndPoint.ResetConnection(string endPointAddress) {
                 return true;
             }
 
@@ -339,7 +360,7 @@ namespace ShortBus {
 
                 }
                 foreach (MessageTypeMapping map in stored.Subscriptions) {
-                    ((IPublisherConfigureInternal)configure).RegisterMessage(map.TypeName, map.EndPointName);
+                    ((IPublisherConfigureInternal)configure).RegisterMessage(map.TypeName, map.EndPointName, map.DiscardIfDown);
                 }
 
 
@@ -520,7 +541,7 @@ namespace ShortBus {
 
                 //add subscriptions for subscribe/unsubscribe
                 ((IPublisherConfigure)configure).RegisterSubscriber("subsub", new SubscriptionSubscriber());
-                ((IPublisherConfigure)configure).RegisterMessage<SubscriptionRequest>("subsub");
+                ((IPublisherConfigure)configure).RegisterMessage<SubscriptionRequest>("subsub", false);
 
                 configure.Subscribers.ToList().ForEach(k => {
                     subscribersRunning.AddOrUpdate(k.Key, new pubStat() { Has = true, Processing = false }, (c, z) => { return new pubStat() { Has = true, Processing = false }; });
@@ -558,6 +579,7 @@ namespace ShortBus {
                             //??? how to do unsubscribe
                             SubscriptionRequest request = new SubscriptionRequest() {
                                 EndPoint = configure.endPointAddress
+                                , DiscardIfSubscriberIsDown = s.DiscardIfDown
                                 , GUID = Util.Util.GetApplicationGuid()
                                 , MessageTypeName = s.TypeName
                                 , SubscriberName = ApplicationName
@@ -875,7 +897,17 @@ namespace ShortBus {
 
                     IEndPoint pub = configure.Publishers.FirstOrDefault(g => g.Key.Equals(entry.EndPointName, StringComparison.OrdinalIgnoreCase)).Value;
                     if (pub != null && !pub.ServiceIsDown()) {
-                        toReturn = pub.Publish(msg).Status;
+
+                        try {
+
+                            toReturn = pub.Publish(msg).Status;
+                        } catch {
+                            toReturn = entry.DiscardIfDown;
+                        }
+                    } else if (pub.ServiceIsDown()) {
+                        //if subscription allows discard, just return true and let process discard message
+                        toReturn = entry.DiscardIfDown;
+                            
                     }
                 }
             } catch (Exception) {

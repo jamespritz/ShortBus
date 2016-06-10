@@ -73,6 +73,7 @@ namespace Sandbox {
 
             //TestSerialization();
             TestPublish();
+            //TestIPGet();
             //TestMultiThread();
             //TestTx();
             //TestSerialization();
@@ -88,6 +89,10 @@ namespace Sandbox {
 
             Console.ReadKey();
 
+        }
+
+        private static void TestIPGet() {
+            Console.WriteLine("IP: {0}", ShortBus.Util.Util.GetLocalIP());
         }
 
         private static void TestTx() {
@@ -268,6 +273,8 @@ namespace Sandbox {
         }
 
 
+        private static System.Timers.Timer messageSendTimer = new System.Timers.Timer();
+        private static int counter = 0;
 
         private static void TestPublish() {
 
@@ -279,7 +286,7 @@ namespace Sandbox {
                     MongoConnectionString = @"mongodb://127.0.0.1:27017"
 
                     , PublisherSettings = new ShortBus.Default.RESTSettings() {
-                        URL = @"http://192.168.1.7:9876"
+                        URL = @"http://localhost:9876"
                     }
                 }).RegisterMessage<ShortBus.TestMessage>("Default")
             .MaxThreads(4);
@@ -291,42 +298,27 @@ namespace Sandbox {
             Bus.OnThreadStarted += onThreadStarted;
             Bus.Start();
 
+            messageSendTimer.AutoReset = true;
+            messageSendTimer.Enabled = true;
+            messageSendTimer.Interval = 1000;
+            messageSendTimer.Elapsed += MessageSendTimer_Elapsed;
+            messageSendTimer.Start();
+
+            Console.WriteLine("Press any key to stop: ");
+            Console.ReadKey();
 
 
-            bool cont = true;
-            while (cont) {
-                string fromUser = Console.ReadLine();
-                if (fromUser == "x") {
-                    Bus.Stop(false);
-                    cont = false;
-                } else {
+        }
 
-                    int cnt = 0;
-                    if (!string.IsNullOrEmpty(fromUser)) {
-                        cnt = int.Parse(fromUser);
-                    }
-                    
-                    for (int z = 0; z < cnt; z++) {
-
-                        try {
-
-                            using (TransactionScope scope = new TransactionScope(TransactionScopeOption.Required)) {
+        private static void MessageSendTimer_Elapsed(object sender, System.Timers.ElapsedEventArgs e) {
+            using (TransactionScope scope = new TransactionScope(TransactionScopeOption.Required)) {
 
 
-                                Bus.SendMessage<ShortBus.TestMessage>(new TestMessage() { Property = z.ToString() });
-                                scope.Complete();
+                Bus.SendMessage<ShortBus.TestMessage>(new TestMessage() { Property = counter.ToString() });
+                counter += 1;
+                scope.Complete();
 
-                            }
-                        } catch (Exception e) {
-                            Console.WriteLine("errr.. {0}", e.Message);
-                        }
-                    }
-
-                }
             }
-
-
-
         }
 
         private static void onThreadStarted(object sender, EventArgs args) {

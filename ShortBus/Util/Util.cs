@@ -1,13 +1,14 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Web;
 
 namespace ShortBus.Util {
-    internal class Util {
+    public class Util {
     
         public static string GetTypeName(Type t) {
 
@@ -17,6 +18,16 @@ namespace ShortBus.Util {
 
             return string.Format("{0}, {1}", fullName, a.Name);
 
+        }
+
+        public static string GetLocalIP() {
+            var host = Dns.GetHostEntry(Dns.GetHostName());
+            foreach (var ip in host.AddressList) {
+                if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork) {
+                    return ip.ToString();
+                }
+            }
+            return string.Empty;
         }
 
         private static Assembly GetMainAssembly() {
@@ -33,17 +44,27 @@ namespace ShortBus.Util {
         }
 
         public static string GetApplicationName() {
-            return GetMainAssembly().GetName().Name;
+            Assembly assembly = GetMainAssembly();
+            return GetApplicationName(assembly);
             
         }
 
         public static string GetApplicationGuid() {
             Assembly assembly = GetMainAssembly();
-            var attribute = (GuidAttribute)assembly.GetCustomAttributes(typeof(GuidAttribute),true)[0];
+            return GetApplicationGuid(assembly);
+        }
+
+        public static string GetApplicationName(Assembly assembly) {
+            return assembly.GetName().Name;
+
+        }
+
+        public static string GetApplicationGuid(Assembly assembly) {
+            
+            var attribute = (GuidAttribute)assembly.GetCustomAttributes(typeof(GuidAttribute), true)[0];
             var id = attribute.Value;
             return id;
         }
-
         /*
          * 
 
