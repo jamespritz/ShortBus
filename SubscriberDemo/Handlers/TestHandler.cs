@@ -12,13 +12,18 @@ using System.Threading.Tasks;
 namespace SubscriberDemo.Handlers {
     public class TestHandler : IMessageHandler {
         HandlerResponse IMessageHandler.Handle(PersistedMessage message) {
-            Random r = new Random();
-            int t = r.Next(100, 500);
-            Thread.Sleep(t);
-            TestMessage m = JsonConvert.DeserializeObject<TestMessage>(message.PayLoad);
-            Console.WriteLine("Received {0}", m.Property);
+           
 
-            return HandlerResponse.Handled();
+
+            TestMessage m = JsonConvert.DeserializeObject<TestMessage>(message.PayLoad);
+            if (message.HandleRetryCount == 0) {
+                Console.WriteLine("Recieved {0}, rescheduling", m.Property);
+                return HandlerResponse.Retry(TimeSpan.FromMinutes(1));
+            } else {
+                Console.WriteLine("processing {0}", m.Property);
+                return HandlerResponse.Handled();
+            }
+          
         }
 
         bool IMessageHandler.Parallel {

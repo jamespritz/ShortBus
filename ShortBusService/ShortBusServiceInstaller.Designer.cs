@@ -1,7 +1,8 @@
 ﻿using System.Collections.Generic;
 using System.ServiceProcess;
 using System.Linq;
-
+using System;
+using System.Collections;
 
 namespace ShortBusService {
     partial class ShortBusServiceInstaller {
@@ -22,6 +23,10 @@ namespace ShortBusService {
                 components.Dispose();
             }
             base.Dispose(disposing);
+        }
+
+        public override void Uninstall(IDictionary savedState) {
+            base.Uninstall(savedState);
         }
 
         #region Component Designer generated code
@@ -59,6 +64,16 @@ namespace ShortBusService {
             string sdesc = "Short Bus Endpoint";
             string dname = "Short Bus Endpoint";
 
+            if (!string.IsNullOrEmpty(Program.serviceName)) {
+                sname = Program.serviceName;
+            }
+            if (!string.IsNullOrEmpty(Program.serviceDesc)) {
+                sdesc = Program.serviceDesc;
+            }
+            if (!string.IsNullOrEmpty(Program.displayName)) {
+                dname = Program.displayName;
+            }
+
             List<KeyValuePair<string, string>> paramsAsList = new List<KeyValuePair<string, string>>();
             foreach (string k in x.Context.Parameters.Keys) {
                 paramsAsList.Add(new KeyValuePair<string, string>(k, x.Context.Parameters[k]));
@@ -73,6 +88,10 @@ namespace ShortBusService {
 
             keyValue = paramsAsList.FirstOrDefault(g => g.Key.Equals("displayname", System.StringComparison.OrdinalIgnoreCase)).Value;
             if (!string.IsNullOrEmpty(keyValue)) { dname = keyValue; }
+
+            Console.WriteLine("Service Name: {0}", sname);
+            Console.WriteLine("Service Description: {0}", sdesc);
+            Console.WriteLine("Display Name: {0}", dname);
 
             this.ServiceInstaller1.ServiceName = sname;
             this.ServiceInstaller1.Description = sdesc;
@@ -83,14 +102,26 @@ namespace ShortBusService {
             System.Console.WriteLine("*************************************************************");
 
             System.Configuration.Install.Installer x = (sender as System.Configuration.Install.Installer);
-
+            
             string sname = "ShortBusSubscriber";
             string sdesc = "Short Bus Subscriber";
             string dname = "Short Bus Subscriber";
 
+            if (!string.IsNullOrEmpty(Program.serviceName)) {
+                sname = Program.serviceName;
+            }
+            if (!string.IsNullOrEmpty(Program.serviceDesc)) {
+                sdesc = Program.serviceDesc;
+            }
+            if (!string.IsNullOrEmpty(Program.displayName)) {
+                dname = Program.displayName;
+            }
+
             List<KeyValuePair<string, string>> paramsAsList = new List<KeyValuePair<string, string>>();
+            Console.WriteLine("fuck");
             foreach (string k in x.Context.Parameters.Keys) {
                 paramsAsList.Add(new KeyValuePair<string, string>(k, x.Context.Parameters[k]));
+              
             }
 
             string keyValue = null;
@@ -102,7 +133,17 @@ namespace ShortBusService {
 
             keyValue = paramsAsList.FirstOrDefault(g => g.Key.Equals("displayname", System.StringComparison.OrdinalIgnoreCase)).Value;
             if (!string.IsNullOrEmpty(keyValue)) { dname = keyValue; }
+
+
+            this.ServiceInstaller1.ServiceName = sname;
+            this.ServiceInstaller1.Description = sdesc;
+            this.ServiceInstaller1.DisplayName = dname;
+
+            Console.WriteLine("Service Name: {0}", sname);
+            Console.WriteLine("Service Description: {0}", sdesc);
+            Console.WriteLine("Display Name: {0}", dname);
         }
+
 
 
         #endregion

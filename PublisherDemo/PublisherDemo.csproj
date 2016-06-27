@@ -98,7 +98,6 @@
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <Target Name="BeforeBuild">
     <Copy DestinationFolder="$(OutDir)" SourceFiles="$(ProjectDir)/ShortBusService.exe.config" />
-    
     <!-- DONT FUCKING ADD THIS LINE BACK -->
     <!--<Copy DestinationFolder="C:\CEI\TFS\Shared Core Framework\dev\SandBox\bin\debug" SourceFiles="C:\CEI\TFS\Shared Core Framework\dev\SandBox\db.config" />-->
   </Target>

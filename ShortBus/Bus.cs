@@ -1399,7 +1399,7 @@ namespace ShortBus {
                                         } else if (handled.Status == HandlerStatusOptions.Reschedule ) {
 
                                             //need to update message as rescheduled with new date
-                                            var popped = configure.publisher_LocalStorage.Reschedule(msg.Id, handled.RescheduleIncrement);
+                                            var popped = configure.subscriber_LocalStorage.Reschedule(msg.Id, handled.RescheduleIncrement);
 
                                         }
 

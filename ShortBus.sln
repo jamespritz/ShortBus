@@ -11,6 +11,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sandbox", "Sandbox\Sandbox.
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ShortBusService", "ShortBusService\ShortBusService.csproj", "{6901AE82-FA41-402F-A61A-92B7E75A29AF}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Tests", "Tests\Tests.csproj", "{01E5604D-2763-4B4D-B43F-F2D210E5AD16}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -29,6 +31,10 @@ Global
 		{6901AE82-FA41-402F-A61A-92B7E75A29AF}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{6901AE82-FA41-402F-A61A-92B7E75A29AF}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{6901AE82-FA41-402F-A61A-92B7E75A29AF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{01E5604D-2763-4B4D-B43F-F2D210E5AD16}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{01E5604D-2763-4B4D-B43F-F2D210E5AD16}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{01E5604D-2763-4B4D-B43F-F2D210E5AD16}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{01E5604D-2763-4B4D-B43F-F2D210E5AD16}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

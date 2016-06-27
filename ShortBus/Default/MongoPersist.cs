@@ -10,6 +10,41 @@ using MongoDB.Bson;
 
 namespace ShortBus.Default {
 
+    public interface IMongoProvider {
+        IMongoClient GetClient();
+
+
+    }
+
+    public class MongoProvider : IMongoProvider {
+
+        private MongoPersistSettings connx;
+        public MongoProvider(MongoPersistSettings setting) {
+            this.connx = null;
+        }
+
+        private IMongoClient clientInstance = null;
+        public IMongoClient GetClient() {
+            if (clientInstance == null) {
+                clientInstance = new MongoClient(this.connx.ConnectionString);
+            }
+            return clientInstance;
+        }
+        //public IMongoCollection<T> GetCollection<T>() {
+        //    throw new NotImplementedException();
+        //}
+
+        //private IMongoDatabase dbInstance = null;
+        //public IMongoDatabase GetDatabase() {
+        //    if (dbInstance == null) {
+        //        IMongoClient client = this.GetClient();
+        //        dbInstance = client.GetDatabase(this.connx.DB);
+
+        //    }
+        //    return dbInstance;
+        //}
+    }
+
 
     public class MongoPersistSettings {
         public string ConnectionString { get;set; }
@@ -21,32 +56,44 @@ namespace ShortBus.Default {
 
     public class MongoPersist : IPersist {
 
-        private MongoPersistSettings settings = null;
+
         private bool serviceDown = false;
 
-        private IMongoClient client = null;
-        private IMongoDatabase db = null;
-       
+
+        private IMongoDatabase dbInstance = null;
+        private MongoPersistSettings settings = null;
+
 
         public MongoPersist(MongoPersistSettings settings ) {
             this.settings = settings;
+            this.mongoProvider = new MongoProvider(settings);
         }
 
-        private bool collectionExists = false;
-        private IMongoCollection<PersistedMessage> GetCollection() {
+        private IMongoProvider mongoProvider = null;
+        public IMongoProvider MongoProvider {
+            get {
+                return this.mongoProvider;
+            }
+            set { this.mongoProvider = value; }
+        }
+
+        public IMongoDatabase GetDatabase() {
+            if (this.dbInstance == null) {
+                this.dbInstance = MongoProvider.GetClient().GetDatabase(settings.DB);
+            }
+            return this.dbInstance;
+        }
+        
+
+
+        public IMongoCollection<PersistedMessage> GetCollection() {
 
             IMongoCollection<PersistedMessage> collection = null;
-            try { 
+            try {
 
-                if (client == null) {
-                    client = new MongoClient(this.settings.ConnectionString);
-                }
-                if (db == null) {
-                    db = client.GetDatabase(this.settings.DB);
-                    
-                }
+                IMongoDatabase db = this.GetDatabase();
 
-                if (!collectionExists && !((IPersist)this).CollectionExists) {
+                if (!((IPersist)this).CollectionExists) {
                     db.CreateCollection(this.settings.Collection);
                     collection = db.GetCollection<PersistedMessage>(this.settings.Collection);
 
@@ -88,10 +135,9 @@ namespace ShortBus.Default {
         bool IPersist.DBExists {  get {
 
                 bool found = false;
-                if (client == null) {
-                    client = new MongoClient(this.settings.ConnectionString);
-                }
+                
 
+                IMongoClient client = this.MongoProvider.GetClient();
 
                 using (var cursor = client.ListDatabases()) {
                     while (cursor.MoveNext()) {
@@ -111,31 +157,30 @@ namespace ShortBus.Default {
             }
         }
 
+        public bool? collectionExists = null;
         bool IPersist.CollectionExists {
             get {
-                bool found = false;
 
-                if (client == null) {
-                    client = new MongoClient(this.settings.ConnectionString);
-                }
-                if (db == null) {
-                    db = client.GetDatabase(this.settings.DB);
+                if (!this.collectionExists.HasValue) {
+                    this.collectionExists = false;
+                    IMongoDatabase db = this.GetDatabase();
 
-                }
-                using (var cursor = db.ListCollections()) {
-                    while (cursor.MoveNext()) {
-                        foreach (BsonDocument i in cursor.Current) {
-                            string name = i["name"].ToString();
 
-                            if (name.Equals(this.settings.Collection, StringComparison.OrdinalIgnoreCase)) {
-                                found = true;
+                    using (var cursor = db.ListCollections()) {
+                        while (cursor.MoveNext()) {
+                            foreach (BsonDocument i in cursor.Current) {
+                                string name = i["name"].ToString();
+
+                                if (name.Equals(this.settings.Collection, StringComparison.OrdinalIgnoreCase)) {
+                                    this.collectionExists = true;
+
+                                }
 
                             }
-
                         }
                     }
                 }
-                return found;
+                return this.collectionExists.Value;
             }
         }
 
@@ -196,7 +241,7 @@ namespace ShortBus.Default {
             try {
                 FilterDefinitionBuilder<PersistedMessage> fBuilder = Builders<PersistedMessage>.Filter;
 
-                var qfilter = fBuilder.And(fBuilder.Eq(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess), fBuilder.Eq(g => g.Queue, q));
+                var qfilter = fBuilder.And(fBuilder.Eq(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess), fBuilder.Eq(g => g.Queue, q), fBuilder.Lte(g => g.Sent, DateTime.UtcNow));
                 var update = Builders<PersistedMessage>.Update.Set(g => g.Status, PersistedMessageStatusOptions.Marked);
                 var sort = Builders<PersistedMessage>.Sort.Ascending(e => e.Sent).Ascending(e => e.Ordinal);
                 var options = new FindOneAndUpdateOptions<PersistedMessage>() { ReturnDocument = ReturnDocument.After, Sort = sort };
@@ -294,7 +339,7 @@ namespace ShortBus.Default {
             try {
                 FilterDefinitionBuilder<PersistedMessage> fBuilder = Builders<PersistedMessage>.Filter;
 
-                var qfilter = fBuilder.And(fBuilder.Eq(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess), fBuilder.Eq(g => g.Queue, q));
+                var qfilter = fBuilder.And(fBuilder.Eq(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess), fBuilder.Eq(g => g.Queue, q), fBuilder.Lte(g => g.Sent, DateTime.UtcNow));
                 var sort = Builders<PersistedMessage>.Sort.Ascending(e => e.Sent).Ascending(e => e.Ordinal);
                 var options = new FindOptions<PersistedMessage>() {  Sort = sort };
 
@@ -436,9 +481,9 @@ namespace ShortBus.Default {
             this.serviceDown = false;
 
             
-            db = null;
-            client = null;
-  
+            dbInstance = null;
+            collectionExists = null;
+
 
             try {
 
