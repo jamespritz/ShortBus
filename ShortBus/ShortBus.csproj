@@ -109,8 +109,8 @@
     <Compile Include="Persistence\IPersist.cs" />
     <Compile Include="Persistence\PersistedMessage.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
-    <Compile Include="Publish\IPublisher.cs" />
-    <Compile Include="Publish\SubscriptionRequest.cs" />
+    <Compile Include="Publisher\IPublisher.cs" />
+    <Compile Include="Publisher\SubscriptionRequest.cs" />
     <Compile Include="Subscriber\HandlerResponse.cs" />
     <Compile Include="Subscriber\IMessageHandler.cs" />
     <Compile Include="TestMessage.cs" />
