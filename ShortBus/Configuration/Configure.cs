@@ -37,9 +37,13 @@ namespace ShortBus.Configuration {
         string ApplicationName { get; }
 
         string ApplicationGUID { get; }
-        IConfigure DisableStartupTests();
+
         IConfigure SetApplicationName(string appName);
         IConfigure SetApplicationGUID(string appGUID);
+
+        IConfigure PersistTo(IPeristProvider provider);
+
+        IConfigure MyEndPoint(EndPoint myEndPoint);
 
         bool IsASource { get; }
         bool IsAPublisher { get; }
@@ -47,10 +51,10 @@ namespace ShortBus.Configuration {
     }
 
     public interface ISourceConfigure {
-        ISourceConfigure Default(DefaultSourceSettings settings);
+        
+       
         ISourceConfigure RegisterMessage<T>(string publisherName);
         ISourceConfigure RegisterPublisher(IEndPoint publisher, string publisherName);
-        ISourceConfigure RegisterDefaultPublisher(IEndPoint publisher);
         ISourceConfigure MaxThreads(int threadCount);
         
     }
@@ -58,7 +62,7 @@ namespace ShortBus.Configuration {
 
     public interface IPublisherConfigure {
         
-        IPublisherConfigure Default(DefaultPublisherSettings settings);
+        //IPublisherConfigure Default(DefaultPublisherSettings settings);
 
         IPublisherConfigure RegisterSubscriber(string subscriberName, IEndPoint subscriber);
 
@@ -73,7 +77,7 @@ namespace ShortBus.Configuration {
 
 
     public interface ISubscriberConfigure {
-        ISubscriberConfigure Default(DefaultSubscriberSettings settings);
+        //ISubscriberConfigure Default(DefaultSubscriberSettings settings);
 
         /// <summary>
         /// Map incoming message type to the handler that processes the message
@@ -111,7 +115,7 @@ namespace ShortBus.Configuration {
 
         #region Global
 
-        private bool testOnStartup = true;
+      
         private string applicationName = string.Empty;
         private string appGUID = string.Empty;
 
@@ -119,7 +123,7 @@ namespace ShortBus.Configuration {
         private bool IAmAPublisher = false;
         private bool IAmASubscriber = false;
 
-        public bool TestOnStartup {  get { return this.testOnStartup; } }
+
 
         public bool IsASource {  get { return this.IAmASource; } }
         public bool IsAPublisher { get { return this.IAmAPublisher; } }
@@ -129,10 +133,10 @@ namespace ShortBus.Configuration {
 
         internal List<MessageTypeMapping> Subscriptions { get; set; }
 
-        IConfigure IConfigure.DisableStartupTests() {
-            this.testOnStartup = false;
-            return (IConfigure)this;
-        }
+        //IConfigure IConfigure.DisableStartupTests() {
+        //    this.testOnStartup = false;
+        //    return (IConfigure)this;
+        //}
         IConfigure IConfigure.SetApplicationName(string appName) {
             if (string.IsNullOrEmpty(appName)) {
                 throw new ArgumentException("appName not provided");
@@ -142,6 +146,12 @@ namespace ShortBus.Configuration {
 
             return (IConfigure)this;
         }
+
+        IConfigure IConfigure.MyEndPoint(EndPoint myEndPoint) {
+            this.myEndPoint = myEndPoint;
+            return (IConfigure)this;
+        }
+
         IConfigure IConfigure.SetApplicationGUID(string GUID) {
             if (string.IsNullOrEmpty(GUID)) {
                 throw new ArgumentException("app GUID not provided");
@@ -177,9 +187,8 @@ namespace ShortBus.Configuration {
 
         internal int maxSourceThreads = 1;
         internal IPersist source_LocalStorage { get; set; }
-        internal IPersist source_ConfigStorage { get; set; }
         internal List<MessageTypeMapping> Messages { get; set; }
-
+        internal IPeristProvider storageProvider { get; set; }
         internal void TestSourceConfig() {
             //if iamasource
             //must have a way to persist
@@ -188,8 +197,11 @@ namespace ShortBus.Configuration {
             //each publisher type must be invokable
             //should have messages
             if (this.IAmASource) {
+
+
                 if (this.source_LocalStorage == null) {
-                    throw new BusNotConfiguredException("Source", "Local Storage has not been configured");
+                    this.source_LocalStorage = this.storageProvider.CreatePersist(this, EndPointTypeOptions.Source);
+                    //throw new BusNotConfiguredException("Source", "Local Storage has not been configured");
                 }
                 if (this.Publishers == null || this.Publishers.Count() == 0) {
                     throw new BusNotConfiguredException("Source", "No publishers have been configured");
@@ -219,31 +231,14 @@ namespace ShortBus.Configuration {
                 return (ISourceConfigure)this;
             }
         }
-        ISourceConfigure ISourceConfigure.Default(DefaultSourceSettings settings) {
 
-            //setup local storage
-            MongoPersistSettings dbSettings = new MongoPersistSettings() {
-                ConnectionString = settings.MongoConnectionString
-                , Collection = "source"
-                , DB = this.ApplicationName
-            };
+        IConfigure IConfigure.PersistTo(IPeristProvider provider) {
 
+            this.storageProvider = provider;
 
-            this.source_LocalStorage = new MongoPersist(dbSettings);
-            //setup publisher
-            this.source_ConfigStorage = new MongoPersist(new MongoPersistSettings() {
-                Collection = "source_config"
-                , ConnectionString = settings.MongoConnectionString
-                , DB = this.ApplicationName
-            });
-
-
-            ((ISourceConfigure)this).RegisterDefaultPublisher(new RESTEndPoint(settings.PublisherSettings));
-
-
-            return (ISourceConfigure)this;
-
+            return (IConfigure)this;
         }
+
 
         ISourceConfigure ISourceConfigure.RegisterMessage<T>(string publisherName) {
             if (this.Messages == null) this.Messages = new List<MessageTypeMapping>();
@@ -265,9 +260,6 @@ namespace ShortBus.Configuration {
             this.Publishers.Add(publisherName, publisher);
             return (ISourceConfigure)this;
         }
-        ISourceConfigure ISourceConfigure.RegisterDefaultPublisher(IEndPoint publisher) {
-            return ((ISourceConfigure)this).RegisterPublisher(publisher, "Default");
-        }
 
         ISourceConfigure ISourceConfigure.MaxThreads(int threadCount) {
             maxSourceThreads = threadCount;
@@ -281,12 +273,16 @@ namespace ShortBus.Configuration {
         internal int maxPublisherThreads = 1;
         
         internal IPersist publisher_LocalStorage { get; set; }
-        internal IPersist publisher_ConfigStorage { get; set; }
         internal ConcurrentDictionary<string, IEndPoint> Subscribers { get; set; }
 
 
         internal void TestPublisherConfig() {
             if (IAmAPublisher) {
+
+                if (this.publisher_LocalStorage == null) {
+                    this.publisher_LocalStorage = this.storageProvider.CreatePersist(this, EndPointTypeOptions.Publisher);
+                    //throw new BusNotConfiguredException("Source", "Local Storage has not been configured");
+                }
 
                 if (string.IsNullOrEmpty(this.ApplicationName)) {
                     throw new BusNotConfiguredException("Publisher", "Application Name is not configured");
@@ -302,24 +298,24 @@ namespace ShortBus.Configuration {
                 return (IPublisherConfigure)this;
             }
         }
-        IPublisherConfigure IPublisherConfigure.Default(DefaultPublisherSettings settings) {
-            //setup local storage
-            MongoPersistSettings dbSettings = new MongoPersistSettings() {
-                ConnectionString = settings.MongoConnectionString
-                , Collection = "publish"
-                , DB = this.ApplicationName
-            };
+        //IPublisherConfigure IPublisherConfigure.Default(DefaultPublisherSettings settings) {
+        //    //setup local storage
+        //    MongoPersistSettings dbSettings = new MongoPersistSettings() {
+        //        ConnectionString = settings.MongoConnectionString
+        //        , Collection = "publish"
+        //        , DB = this.ApplicationName
+        //    };
 
-            this.publisher_LocalStorage = new MongoPersist(dbSettings);
-            this.publisher_ConfigStorage = new MongoPersist(new MongoPersistSettings() {
-                Collection = "publisher_config"
-                , ConnectionString = settings.MongoConnectionString
-                , DB = this.ApplicationName
-            });
+        //    this.publisher_LocalStorage = new MongoPersist(dbSettings);
+        //    this.publisher_ConfigStorage = new MongoPersist(new MongoPersistSettings() {
+        //        Collection = "publisher_config"
+        //        , ConnectionString = settings.MongoConnectionString
+        //        , DB = this.ApplicationName
+        //    });
 
-            return (IPublisherConfigure)this;
+        //    return (IPublisherConfigure)this;
 
-        }
+        //}
 
         IPublisherConfigure IPublisherConfigure.RegisterSubscriber(string subscriberName, IEndPoint subscriber) {
 
@@ -350,17 +346,21 @@ namespace ShortBus.Configuration {
         #region Subscriber
 
         internal IPersist subscriber_LocalStorage { get; set; }
-        internal IPersist subscriber_ConfigStorage { get; set; }
+
         internal void TestSubscriberConfig() {
             if (IAmASubscriber) {
 
+                if (this.subscriber_LocalStorage == null) {
+                    this.subscriber_LocalStorage = this.storageProvider.CreatePersist(this, EndPointTypeOptions.Subscriber);
+                    //throw new BusNotConfiguredException("Source", "Local Storage has not been configured");
+                }
 
                 if (string.IsNullOrEmpty(this.ApplicationName)) {
                     throw new BusNotConfiguredException("Subscriber", "Application Name is not configured");
                 }
             }
         }
-        internal string endPointAddress { get; set; }
+        internal EndPoint myEndPoint { get; set; }
         ISubscriberConfigure IConfigure.AsASubscriber {
             get {
                 this.IAmASubscriber = true;
@@ -378,27 +378,27 @@ namespace ShortBus.Configuration {
             return (ISubscriberConfigure)this;
         }
 
-        ISubscriberConfigure ISubscriberConfigure.Default(DefaultSubscriberSettings settings) {
-            MongoPersistSettings dbSettings = new MongoPersistSettings() {
-                ConnectionString = settings.MongoConnectionString
-                , Collection = "subscribe"
-                , DB = this.ApplicationName
-            };
+        //ISubscriberConfigure ISubscriberConfigure.Default(DefaultSubscriberSettings settings) {
+        //    MongoPersistSettings dbSettings = new MongoPersistSettings() {
+        //        ConnectionString = settings.MongoConnectionString
+        //        , Collection = "subscribe"
+        //        , DB = this.ApplicationName
+        //    };
 
-            this.subscriber_LocalStorage = new MongoPersist(dbSettings);
-            this.subscriber_ConfigStorage = new MongoPersist(new MongoPersistSettings() {
-                Collection = "subscriber_config"
-                , ConnectionString = settings.MongoConnectionString
-                , DB = this.ApplicationName
-            });
-            this.endPointAddress = settings.Endpoint.URL;
+        //    this.subscriber_LocalStorage = new MongoPersist(dbSettings);
+        //    this.subscriber_ConfigStorage = new MongoPersist(new MongoPersistSettings() {
+        //        Collection = "subscriber_config"
+        //        , ConnectionString = settings.MongoConnectionString
+        //        , DB = this.ApplicationName
+        //    });
+        //    this.endPointAddress = settings.Endpoint.URL;
 
-            if (Publishers == null) { Publishers = new Dictionary<string, IEndPoint>(); }
-            Publishers.Add("Default", new RESTEndPoint(settings.Publisher));
+        //    if (Publishers == null) { Publishers = new Dictionary<string, IEndPoint>(); }
+        //    Publishers.Add("Default", new RESTEndPoint(settings.Publisher));
             
 
-            return (ISubscriberConfigure)this;
-        }
+        //    return (ISubscriberConfigure)this;
+        //}
 
         public ISubscriberConfigure RegisterMessageHandler<T>(IMessageHandler handler) {
             //handlers

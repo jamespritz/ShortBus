@@ -15,6 +15,10 @@ namespace ShortBus.Publish {
 
     }
 
+    public enum EndPointTypeOptions {
+        Source = 1, Publisher = 2, Subscriber = 3
+    };
+
     public interface IEndPoint {
 
         /// <summary>

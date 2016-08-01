@@ -25,8 +25,9 @@ namespace ShortBus {
         private string txId = string.Empty;
         private Task whenDone = null;
 
-        public void SendMessage(IEnumerable<PersistedMessage> messages, IPersist persistor, Task whenDone) {
+        public string SendMessage(IEnumerable<PersistedMessage> messages, IPersist persistor, Task whenDone) {
 
+            string txId = string.Empty;
             Transaction currentTx = Transaction.Current;
             if (currentTx != null) {
 
@@ -37,9 +38,15 @@ namespace ShortBus {
                 this.whenDone = whenDone;
 
             } else {
+                txId = Guid.NewGuid().ToString();
+                foreach(var m in messages) {
+                    m.TransactionID = txId;
+                }
                 persistor.Persist(messages);
                 whenDone.Start();
             }
+
+            return txId;
 
         }
 
@@ -137,24 +144,24 @@ namespace ShortBus {
                 string payLoad = message.PayLoad;
                 SubscriptionRequest request = Newtonsoft.Json.JsonConvert.DeserializeObject<SubscriptionRequest>(payLoad);
 
-                EndpointConfigPersist<PublisherEndPointConfig> config = new EndpointConfigPersist<PublisherEndPointConfig>(configure.publisher_ConfigStorage);
-                PublisherEndPointConfig stored = config.GetConfig();
+                EndpointConfigPersist<EndPointConfig> config = new EndpointConfigPersist<EndPointConfig>(configure.publisher_LocalStorage);
+                EndPointConfig stored = config.GetConfig();
 
                 bool changed = false;
-                if (request.UnSubscribe) {
+                if (request.DeRegister) {
 
                     bool subscriberStored = false, subscriptionStored = false, lastSubscription = false;
-                    subscriberStored = stored.Subscribers.Any(g => g.Key.Equals(request.SubscriberName, StringComparison.OrdinalIgnoreCase));
+                    subscriberStored = stored.Subscribers().Any(g => g.Name.Equals(request.Name, StringComparison.OrdinalIgnoreCase));
                     subscriptionStored = stored.Subscriptions.Any(g => g.TypeName.Equals(request.MessageTypeName, StringComparison.Ordinal)
-                        && g.EndPointName.Equals(request.SubscriberName, StringComparison.OrdinalIgnoreCase));
-                    lastSubscription = stored.Subscriptions.Count(g => g.EndPointName.Equals(request.SubscriberName, StringComparison.OrdinalIgnoreCase)) == 1;
+                        && g.EndPointName.Equals(request.Name, StringComparison.OrdinalIgnoreCase));
+                    lastSubscription = stored.Subscriptions.Count(g => g.EndPointName.Equals(request.Name, StringComparison.OrdinalIgnoreCase)) == 1;
                     if (subscriberStored && lastSubscription) {
-                        stored.Subscribers.Remove(request.SubscriberName);
+                        stored.RemoveEndPoint(request.Name);
                         changed = true;
                     }
                     if (subscriptionStored) {
                         MessageTypeMapping m = stored.Subscriptions.FirstOrDefault(g => g.TypeName.Equals(request.MessageTypeName, StringComparison.Ordinal)
-                        && g.EndPointName.Equals(request.SubscriberName, StringComparison.OrdinalIgnoreCase));
+                        && g.EndPointName.Equals(request.Name, StringComparison.OrdinalIgnoreCase));
                         stored.Subscriptions.Remove(m);
                         changed = true;
                     }
@@ -170,17 +177,17 @@ namespace ShortBus {
 
 
 
-                    MessageTypeMapping c = configure.Subscriptions.FirstOrDefault(g => g.EndPointName.Equals(request.SubscriberName, StringComparison.OrdinalIgnoreCase) && g.TypeName.Equals(request.MessageTypeName, StringComparison.OrdinalIgnoreCase));
+                    MessageTypeMapping c = configure.Subscriptions.FirstOrDefault(g => g.EndPointName.Equals(request.Name, StringComparison.OrdinalIgnoreCase) && g.TypeName.Equals(request.MessageTypeName, StringComparison.OrdinalIgnoreCase));
                     if (!string.IsNullOrEmpty(c.EndPointName)) {
                         configure.Subscriptions.Remove(c);
                     }
                     //if no other subscriptions, remove subscriber
-                    if (!configure.Subscriptions.Any(g => g.EndPointName.Equals(request.SubscriberName, StringComparison.OrdinalIgnoreCase))) {
+                    if (!configure.Subscriptions.Any(g => g.EndPointName.Equals(request.Name, StringComparison.OrdinalIgnoreCase))) {
                         IEndPoint toRemove = null;
                         pubStat statToRemove;
-                        subscribersRunning.TryRemove(request.SubscriberName, out statToRemove);
+                        subscribersRunning.TryRemove(request.Name, out statToRemove);
                         currentSubscriber = 0;
-                        configure.Subscribers.TryRemove(request.SubscriberName, out toRemove);
+                        configure.Subscribers.TryRemove(request.Name, out toRemove);
                         
                     }
 
@@ -196,25 +203,35 @@ namespace ShortBus {
                      * add to configure.subscriptions if not there
                      */
                     bool subscriberStored = false, subscriptionStored = false;
-                    subscriberStored = stored.Subscribers.Any(g => g.Key.Equals(request.SubscriberName, StringComparison.OrdinalIgnoreCase));
+                    subscriberStored = stored.Subscribers().Any(g => g.Name.Equals(request.Name, StringComparison.OrdinalIgnoreCase));
                     subscriptionStored = stored.Subscriptions.Any(g => g.TypeName.Equals(request.MessageTypeName, StringComparison.Ordinal)
-                        && g.EndPointName.Equals(request.SubscriberName, StringComparison.OrdinalIgnoreCase));
+                        && g.EndPointName.Equals(request.Name, StringComparison.OrdinalIgnoreCase));
                     
                     if (!subscriberStored) {
-                        stored.Subscribers.Add(request.SubscriberName, request.EndPoint);
+                        stored.AddEndPoint(new EndPoint() {
+                            Name = request.Name
+                                , EndPointAddress = request.EndPoint
+                                , EndPointType = EndPointTypeOptions.Subscriber
+                        });
+                        
                         changed = true;
                     } else {
                         //if subscriber stored... make sure the endpoint is the same...
-                        KeyValuePair<string, string> match = stored.Subscribers.FirstOrDefault(g => g.Key.Equals(request.SubscriberName, StringComparison.OrdinalIgnoreCase));
-                        if (!match.Value.Equals(request.EndPoint, StringComparison.OrdinalIgnoreCase)) {
-                            stored.Subscribers.Remove(request.SubscriberName);
-                            stored.Subscribers.Add(request.SubscriberName, request.EndPoint);
+                        EndPoint match = stored.Subscribers().FirstOrDefault(g => g.Name.Equals(request.Name, StringComparison.OrdinalIgnoreCase));
+                        if (!match.EndPointAddress.Equals(request.EndPoint, StringComparison.OrdinalIgnoreCase)) {
+                            stored.RemoveEndPoint(request.Name);
+                            stored.AddEndPoint(new EndPoint() {
+                                Name = request.Name
+                                , EndPointAddress = request.EndPoint
+                                , EndPointType = EndPointTypeOptions.Subscriber
+                            });
+                            
                             changed = true;
                         }
                     }
                     if (!subscriptionStored) {
                         
-                        stored.Subscriptions.Add(new MessageTypeMapping() { EndPointName = request.SubscriberName, TypeName = request.MessageTypeName, DiscardIfDown = request.DiscardIfSubscriberIsDown });
+                        stored.Subscriptions.Add(new MessageTypeMapping() { EndPointName = request.Name, TypeName = request.MessageTypeName, DiscardIfDown = request.DiscardIfSubscriberIsDown });
                         changed = true;
                     }
                     if (changed) {
@@ -223,41 +240,41 @@ namespace ShortBus {
 
 
                     //if subscriber not registered, add it
-                    IEndPoint registeredSubscriber = configure.Subscribers.FirstOrDefault(g => g.Key.Equals(request.SubscriberName, StringComparison.OrdinalIgnoreCase)).Value;
+                    IEndPoint registeredSubscriber = configure.Subscribers.FirstOrDefault(g => g.Key.Equals(request.Name, StringComparison.OrdinalIgnoreCase)).Value;
                     if (registeredSubscriber == null) {
                         IEndPoint toAdd = new RESTEndPoint(new RESTSettings() { URL = request.EndPoint });
 
-                        ((IPublisherConfigure)configure).RegisterSubscriber(request.SubscriberName, toAdd);
+                        ((IPublisherConfigure)configure).RegisterSubscriber(request.Name, toAdd);
 
-                        subscribersRunning.AddOrUpdate(request.SubscriberName, new pubStat() { Has = true, Processing = false }, (r, z) => { return new pubStat() { Has = true, Processing = false }; });
+                        subscribersRunning.AddOrUpdate(request.Name, new pubStat() { Has = true, Processing = false }, (r, z) => { return new pubStat() { Has = true, Processing = false }; });
 
                     } 
 
-                    if (!configure.Subscribers.Any(g => g.Key.Equals(request.SubscriberName, StringComparison.OrdinalIgnoreCase))) {
+                    if (!configure.Subscribers.Any(g => g.Key.Equals(request.Name, StringComparison.OrdinalIgnoreCase))) {
                         IEndPoint toAdd = new RESTEndPoint(new RESTSettings() { URL = request.EndPoint });
 
-                        ((IPublisherConfigure)configure).RegisterSubscriber(request.SubscriberName, toAdd);
+                        ((IPublisherConfigure)configure).RegisterSubscriber(request.Name, toAdd);
 
-                        subscribersRunning.AddOrUpdate(request.SubscriberName, new pubStat() { Has = true, Processing = false }, (r, z) => { return new pubStat() { Has = true, Processing = false }; });
+                        subscribersRunning.AddOrUpdate(request.Name, new pubStat() { Has = true, Processing = false }, (r, z) => { return new pubStat() { Has = true, Processing = false }; });
                         
                         
                     }
 
-                    MessageTypeMapping c = configure.Subscriptions.FirstOrDefault(g => g.EndPointName.Equals(request.SubscriberName, StringComparison.OrdinalIgnoreCase) && g.TypeName.Equals(request.MessageTypeName, StringComparison.OrdinalIgnoreCase));
+                    MessageTypeMapping c = configure.Subscriptions.FirstOrDefault(g => g.EndPointName.Equals(request.Name, StringComparison.OrdinalIgnoreCase) && g.TypeName.Equals(request.MessageTypeName, StringComparison.OrdinalIgnoreCase));
                     if (c == null) {
-                        ((IPublisherConfigureInternal)configure).RegisterMessage(request.MessageTypeName, request.SubscriberName, request.DiscardIfSubscriberIsDown);
+                        ((IPublisherConfigureInternal)configure).RegisterMessage(request.MessageTypeName, request.Name, request.DiscardIfSubscriberIsDown);
                         
                     }
 
                     //if the endpoint was down, reset it (since we now know its up)
-                    IEndPoint subscriber = configure.Subscribers.FirstOrDefault(g => g.Key.Equals(request.SubscriberName, StringComparison.OrdinalIgnoreCase)).Value;
+                    IEndPoint subscriber = configure.Subscribers.FirstOrDefault(g => g.Key.Equals(request.Name, StringComparison.OrdinalIgnoreCase)).Value;
                    
                     subscriber.ResetConnection(request.EndPoint);
                     //unmark all messages so bus resends
-                    configure.publisher_LocalStorage.UnMarkAll(request.SubscriberName);
+                    configure.publisher_LocalStorage.UnMarkAll(request.Name);
 
 
-                    subscribersRunning.AddOrUpdate(request.SubscriberName, new pubStat() { Has = true, Processing = false }, (k, v) => {
+                    subscribersRunning.AddOrUpdate(request.Name, new pubStat() { Has = true, Processing = false }, (k, v) => {
                         return new pubStat() { Has = true, Processing = false };
                     });
 
@@ -270,6 +287,49 @@ namespace ShortBus {
 
                 return new EndpointResponse() { Status = true };
    
+            }
+
+            //running in process
+            bool IEndPoint.ResetConnection() {
+                return true;
+            }
+            bool IEndPoint.ResetConnection(string endPointAddress) {
+                return true;
+            }
+
+            bool IEndPoint.ServiceIsDown() {
+                return false;
+            }
+        }
+
+        class EndpointRegistrationSubscriber : IEndPoint {
+            EndpointResponse IEndPoint.HelloWorld(PersistedMessage message) {
+                return new EndpointResponse() { Status = true, PayLoad = null };
+            }
+
+            EndpointResponse IEndPoint.Publish(PersistedMessage message) {
+
+                /* source is requesting that I (as a publisher) publish it's messaged
+                 * I have to make sure the endpoint is registered so I can call back if needed.
+                */
+                string payLoad = message.PayLoad;
+                EndpointRegistrationRequest request = Newtonsoft.Json.JsonConvert.DeserializeObject<EndpointRegistrationRequest>(payLoad);
+
+                EndpointConfigPersist<EndPointConfig> config = new EndpointConfigPersist<EndPointConfig>(configure.publisher_LocalStorage);
+                EndPointConfig stored = config.GetConfig();
+
+                bool changed = false;
+                if (request.DeRegister) {
+
+                  
+
+                } else {
+                   
+
+                }
+
+                return new EndpointResponse() { Status = true };
+
             }
 
             //running in process
@@ -318,13 +378,13 @@ namespace ShortBus {
         private static void ResolvePersistedConfig() {
             if (configure.IsASource) {
                 
-                SourceEndPointConfig stored = null;
-                EndpointConfigPersist<SourceEndPointConfig> sourceConfig = new EndpointConfigPersist<SourceEndPointConfig>(configure.source_ConfigStorage);
+                EndPointConfig stored = null;
+                EndpointConfigPersist<EndPointConfig> sourceConfig = new EndpointConfigPersist<EndPointConfig>(configure.source_LocalStorage);
                 
 
                 stored = sourceConfig.GetConfig();
                 if (stored == null) {
-                    stored = new SourceEndPointConfig() {
+                    stored = new EndPointConfig() {
                         ApplicationGUID = ((IConfigure)configure).ApplicationGUID
                         , ApplicationName = ((IConfigure)configure).ApplicationName
                         , Version = "1.0"
@@ -339,24 +399,24 @@ namespace ShortBus {
 
             if (configure.IsAPublisher) {
 
-                PublisherEndPointConfig stored = null;
-                EndpointConfigPersist<PublisherEndPointConfig> pubConfig = new EndpointConfigPersist<PublisherEndPointConfig>(configure.publisher_ConfigStorage);
+                EndPointConfig stored = null;
+                EndpointConfigPersist<EndPointConfig> pubConfig = new EndpointConfigPersist<EndPointConfig>(configure.publisher_LocalStorage);
 
 
                 stored = pubConfig.GetConfig();
                 if (stored == null) {
-                    stored = new PublisherEndPointConfig() {
+                    stored = new EndPointConfig() {
                         ApplicationGUID = ((IConfigure)configure).ApplicationGUID
                         , ApplicationName = ((IConfigure)configure).ApplicationName
                         , Version = "1.0"
-                        , Subscribers = new Dictionary<string, string>()
+                        , EndPoints = new List<EndPoint>()
                         , Subscriptions = new List<MessageTypeMapping>()
                     };
                     pubConfig.UpdateConfig(stored);
                 }
 
-                foreach (KeyValuePair<string,string> s in stored.Subscribers) {
-                    ((IPublisherConfigure)configure).RegisterSubscriber(s.Key, new RESTEndPoint(new RESTSettings() { URL = s.Value }));
+                foreach (EndPoint s in stored.Subscribers()) {
+                    ((IPublisherConfigure)configure).RegisterSubscriber(s.Name, new RESTEndPoint(new RESTSettings() { URL = s.EndPointAddress }));
 
                 }
                 foreach (MessageTypeMapping map in stored.Subscriptions) {
@@ -368,13 +428,13 @@ namespace ShortBus {
 
             if (configure.IsASubscriber) {
 
-                SubscriberEndPointConfig stored = null;
-                EndpointConfigPersist<SubscriberEndPointConfig> subConfig = new EndpointConfigPersist<SubscriberEndPointConfig>(configure.subscriber_ConfigStorage);
+                EndPointConfig stored = null;
+                EndpointConfigPersist<EndPointConfig> subConfig = new EndpointConfigPersist<EndPointConfig>(configure.subscriber_LocalStorage);
 
 
                 stored = subConfig.GetConfig();
                 if (stored == null) {
-                    stored = new SubscriberEndPointConfig() {
+                    stored = new EndPointConfig() {
                         ApplicationGUID = ((IConfigure)configure).ApplicationGUID
                         , ApplicationName = ((IConfigure)configure).ApplicationName
                         , Version = "1.0"
@@ -471,21 +531,26 @@ namespace ShortBus {
         public static void Start() {
 
 
-            configure.TestSourceConfig();
-            configure.TestSubscriberConfig();
-            configure.TestPublisherConfig();
+            if (configure.IsASource) {
+                configure.TestSourceConfig();
+            }
+           
+            if (configure.IsASubscriber) {   
+                configure.TestSubscriberConfig();
+            }
+            
+            if (configure.IsAPublisher) {
+                configure.TestPublisherConfig();
+            }
+            
+            
+            
 
             stopped = false;
 
+            
 
 
-            if (configure.TestOnStartup) {
-
-                //throw exceptions if not good
-                //test persistence
-                //test publishers
-
-            }
             RaiseOnStarted();
             CTS = new CancellationTokenSource();
 
@@ -543,6 +608,9 @@ namespace ShortBus {
                 ((IPublisherConfigure)configure).RegisterSubscriber("subsub", new SubscriptionSubscriber());
                 ((IPublisherConfigure)configure).RegisterMessage<SubscriptionRequest>("subsub", false);
 
+                ((IPublisherConfigure)configure).RegisterSubscriber("regsub", new EndpointRegistrationSubscriber());
+                ((IPublisherConfigure)configure).RegisterMessage<EndpointRegistrationRequest>("regsub", false);
+
                 configure.Subscribers.ToList().ForEach(k => {
                     subscribersRunning.AddOrUpdate(k.Key, new pubStat() { Has = true, Processing = false }, (c, z) => { return new pubStat() { Has = true, Processing = false }; });
                 });
@@ -578,12 +646,12 @@ namespace ShortBus {
                         if (!publisher.ServiceIsDown()) {
                             //??? how to do unsubscribe
                             SubscriptionRequest request = new SubscriptionRequest() {
-                                EndPoint = configure.endPointAddress
+                                EndPoint = configure.myEndPoint.EndPointAddress
                                 , DiscardIfSubscriberIsDown = s.DiscardIfDown
                                 , GUID = Util.Util.GetApplicationGuid()
                                 , MessageTypeName = s.TypeName
-                                , SubscriberName = ApplicationName
-                                , UnSubscribe = false
+                                , Name = ApplicationName
+                                , DeRegister = false
                             };
                             string payLoad = JsonConvert.SerializeObject(request);
                             PersistedMessage msg = new PersistedMessage() {
@@ -644,7 +712,7 @@ namespace ShortBus {
         private static int currentPublisher = 0;
         private static int maxSourceThreads = 1;
 
-        public static void SendMessage<T>(T message) {
+        public static string SendMessage<T>(T message) {
 
 
 
@@ -688,6 +756,7 @@ namespace ShortBus {
                         , Status = PersistedMessageStatusOptions.ReadyToProcess
                         , Subscriber = null
                         , Ordinal = id
+                        , TransactionID = msg.TransactionID
                         , Queue = m.EndPointName
                     };
                     messages.Add(copied);
@@ -717,10 +786,10 @@ namespace ShortBus {
 
                 TxRM rm = new TxRM();
                 
-                rm.SendMessage(messages, configure.source_LocalStorage, whenDone);
+                string transactionId = rm.SendMessage(messages, configure.source_LocalStorage, whenDone);
 
-                
-                
+
+
                 //foreach (MessageTypeMapping m in publishers) {
                 //    publishersRunning.AddOrUpdate(m.EndPointName, new pubStat() { Has = true, Processing = false }, (k, v) => {
 
@@ -731,6 +800,8 @@ namespace ShortBus {
                 //        }
                 //    });
                 //}
+
+                return transactionId;
 
 
             } catch (Exception) {
@@ -1022,6 +1093,65 @@ namespace ShortBus {
             StartProcessingPublisher();
         }
 
+        public static void ReceiveMessage(PersistedMessage message) {
+
+
+
+            if (stopped || stopping) {
+                throw new BusNotRunningException("Bus has been stopped and cannot accept any new messages");
+            }
+
+            if (!configure.IsASubscriber) {
+                throw new BusNotConfiguredException("Subscriber", "Bus not configured as a subscriber");
+            }
+
+
+
+
+            //persist message to local storage
+            try {
+
+                int id = SyncGetPadding();
+
+                var handlers = configure.Handlers.Where(g => g.Key.Equals(message.MessageType, StringComparison.OrdinalIgnoreCase));
+                List<PersistedMessage> messages = new List<PersistedMessage>();
+
+                foreach (KeyValuePair<string, IMessageHandler> m in handlers) {
+                    PersistedMessage copied = (PersistedMessage)message.Clone();
+                    copied.MessageHandler = m.Key;
+                    copied.Queue = m.Key;
+                    copied.Received = DateTime.UtcNow;
+                    copied.Ordinal = id;
+                    copied.Status = PersistedMessageStatusOptions.ReadyToProcess;
+                    messages.Add(copied);
+                }
+
+                if (configure.subscriber_LocalStorage.ServiceIsDown()) {
+                    throw new ServiceEndpointDownException("Message Peristor is Down");
+                }
+
+                configure.subscriber_LocalStorage.Persist(messages);
+                foreach (KeyValuePair<string, IMessageHandler> m in handlers) {
+                    handlersRunning.AddOrUpdate(m.Key, new pubStat() { Has = true, Processing = false }, (k, v) => {
+
+                        if (!v.Processing) {
+                            return new pubStat() { Has = true, Processing = false };
+                        } else {
+                            return v;
+                        }
+                    });
+                }
+
+
+            } catch (Exception) {
+                throw;
+            }
+
+            StartProcessingSubscriber();
+
+
+        }
+
         private static void StartProcessingPublisher() {
             for (int i = 1; i <= maxPublisherThreads; i++) {
 
@@ -1186,21 +1316,28 @@ namespace ShortBus {
             lock (sourceLock) {
 
                 int current = currentSubscriber;
+                bool processSubscriber = true;
 
+                //if the subscription subscriber has messages, we need to process those immediately
+                //this ensures that the subscriber gets all messsages from the time it subscribes
                 pubStat s = subscribersRunning["subsub"];
-                if (s.Has && !s.Processing) {
+                if (s.Has && !s.Processing) { // if message on queue, but not processing... process it immediately
                     toReturn = "subsub";
                     subscribersRunning.AddOrUpdate("subsub", new pubStat() { Has = true, Processing = true }, (k, v) => {
                         return new pubStat() { Has = true, Processing = true };
                     });
-                } else if (s.Has && s.Processing) {
+                    processSubscriber = false;
+                } else if (s.Has && s.Processing) { //if message on queue, but already processing, don't process anything else until queue is done
 
                     //if we are processing subscription requests, stop all processing until done.
-                    
-                    toReturn = null;
-                
-                } else {
 
+                    toReturn = null;
+                    processSubscriber = false;
+                }
+
+        
+
+                if (processSubscriber) {
                     int next = current + 1;
                     //a thread is already using current, so loop through remaining and grab next
                     for (int i = 0; i < (subscribersRunning.Count); i++) {
@@ -1225,6 +1362,7 @@ namespace ShortBus {
                             currentSubscriber = subscribersRunning.Count - 1;
                         }
                     }
+
                 }
 
             }
@@ -1242,64 +1380,7 @@ namespace ShortBus {
         private static int currentHandler = 0;
         private static int maxSubThreads = 1;
 
-        public static void ReceiveMessage(PersistedMessage message) {
 
-
-
-            if (stopped || stopping) {
-                throw new BusNotRunningException("Bus has been stopped and cannot accept any new messages");
-            }
-
-            if (!configure.IsASubscriber) {
-                throw new BusNotConfiguredException("Subscriber", "Bus not configured as a subscriber");
-            }
-
-
-
-
-            //persist message to local storage
-            try {
-
-                int id = SyncGetPadding();
-
-                var handlers = configure.Handlers.Where(g => g.Key.Equals(message.MessageType, StringComparison.OrdinalIgnoreCase));
-                List<PersistedMessage> messages = new List<PersistedMessage>();
-
-                foreach (KeyValuePair<string,IMessageHandler> m in handlers) {
-                    PersistedMessage copied = (PersistedMessage)message.Clone();
-                    copied.MessageHandler = m.Key;
-                    copied.Queue = m.Key;
-                    copied.Received = DateTime.UtcNow;
-                    copied.Ordinal = id;
-                    copied.Status = PersistedMessageStatusOptions.ReadyToProcess;
-                    messages.Add(copied);
-                }
-
-                if (configure.subscriber_LocalStorage.ServiceIsDown()) {
-                    throw new ServiceEndpointDownException("Message Peristor is Down");
-                }
-
-                configure.subscriber_LocalStorage.Persist(messages);
-                foreach (KeyValuePair<string, IMessageHandler> m in handlers) {
-                    handlersRunning.AddOrUpdate(m.Key, new pubStat() { Has = true, Processing = false }, (k, v) => {
-
-                        if (!v.Processing) {
-                            return new pubStat() { Has = true, Processing = false };
-                        } else {
-                            return v;
-                        }
-                    });
-                }
-
-
-            } catch (Exception) {
-                throw;
-            }
-
-            StartProcessingSubscriber();
-
-
-        }
 
 
         private static void StopProcessingSubscriber(int threadId) {

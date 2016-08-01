@@ -65,7 +65,7 @@ namespace Tests.Persistence {
 
     public class MongoProviderMockHelper {
 
-        public Mock<IMongoProvider> MockProvider { get; set; }
+        public Mock<IMongoProvider<IMongoClient>> MockProvider { get; set; }
         public Mock<IMongoClient> MockClient { get; set; }
         public Mock<IMongoDatabase> MockDatabase { get; set; }
 
@@ -74,7 +74,7 @@ namespace Tests.Persistence {
 
         public MongoProviderMockHelper() {
             
-            this.MockProvider = new Mock<IMongoProvider>();
+            this.MockProvider = new Mock<IMongoProvider<IMongoClient>>();
             this.MockClient = new Mock<IMongoClient>();
             this.MockDatabase = new Mock<IMongoDatabase>();
             this.Db = new FakeDB();

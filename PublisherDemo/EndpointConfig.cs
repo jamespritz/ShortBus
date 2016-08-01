@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using ShortBusService.Configuration;
+using ShortBus.Default;
 
 namespace PublisherDemo {
     public class EndpointConfig : ShortBusService.Configuration.IServiceConfig {
@@ -19,11 +20,15 @@ namespace PublisherDemo {
 
         void IServiceConfig.ConfigureBus() {
             ShortBus.Bus.Configure
+                .PersistTo(new MongoPersistProvider(mongoAddress, MongoDataBaseName.UseExisting("ShortBus")))
+                .MyEndPoint(new ShortBus.Configuration.EndPoint() {
+                    EndPointAddress = endPointAddress
+                     , EndPointType = ShortBus.Publish.EndPointTypeOptions.Source
+                     , Name = ShortBus.Bus.ApplicationName
+                })
                 .AsAPublisher
-                .MaxThreads(4)
-                .Default(new ShortBus.Default.DefaultPublisherSettings() {
-                    MongoConnectionString = mongoAddress
-                });
+                .MaxThreads(4);
+                
         }
     }
 }

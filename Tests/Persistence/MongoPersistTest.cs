@@ -57,6 +57,9 @@ namespace Tests.Persistence {
 
         [Fact()]
         public void GetCollectionCreatesIfNotExists() {
+
+
+
             MongoPersist toTest = new MongoPersist(
                 new MongoPersistSettings() {
                     Collection = "newCollection"

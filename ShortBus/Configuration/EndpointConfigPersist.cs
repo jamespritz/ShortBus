@@ -19,16 +19,15 @@ namespace ShortBus.Configuration {
 
             T toReturn = default(T);
 
-            //first check if db exists
-            if (db.DBExists && db.CollectionExists) {
-                PersistedMessage last = db.PeekNext("config");
-                if (last != null) {
 
-                    string serialized = last.PayLoad;
-                    toReturn = Newtonsoft.Json.JsonConvert.DeserializeObject<T>(serialized);
+            PersistedMessage last = db.PeekNext("config");
+            if (last != null) {
 
-                }
+                string serialized = last.PayLoad;
+                toReturn = Newtonsoft.Json.JsonConvert.DeserializeObject<T>(serialized);
+
             }
+         
 
             return toReturn;
         }

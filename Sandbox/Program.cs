@@ -1,21 +1,15 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using ShortBus.Persistence;
-using ShortBus.Publish;
 using ShortBus;
 using System.Threading;
 using System.Collections.Concurrent;
 using System.Net;
 using System.IO;
-using System.Web;
-using Microsoft.Owin.Hosting;
 using ShortBus.Default;
-using ShortBus.Subscriber;
 using System.Transactions;
 
 namespace Sandbox {
@@ -107,12 +101,12 @@ namespace Sandbox {
             }
         }
 
-        private static void TestPersistConfig() {
+        //private static void TestPersistConfig() {
 
-            IPersist s = new MongoPersist(new MongoPersistSettings() { ConnectionString = @"mongodb://127.0.0.1:27017", DB = "SandBox", Collection = "publish" });
-            bool result = s.DBExists;
-            result = s.CollectionExists;
-        }
+        //    IPersist s = new MongoPersist(new MongoPersistSettings() { ConnectionString = @"mongodb://127.0.0.1:27017", DB = "SandBox", Collection = "publish" });
+        //    bool result = s.DBExists;
+        //    result = s.CollectionExists;
+        //}
 
         private static async Task TestWebPublisher() {
             
@@ -278,18 +272,28 @@ namespace Sandbox {
 
         private static void TestPublish() {
 
-        
 
 
-            Bus.Configure.DisableStartupTests()
-                .AsASource.Default(new ShortBus.Default.DefaultSourceSettings() {
-                    MongoConnectionString = @"mongodb://127.0.0.1:27017"
+//            new MongoPersist(new MongoPersistSettings() {
+//                Collection = "source", ConnectionString = @"mongodb://127.0.0.1:27017", DB = Bus.ApplicationName
+//            })
+//                 , new MongoPersist(new MongoPersistSettings() {
+//    Collection = "config", ConnectionString = @"mongodb://127.0.0.1:27017", DB = Bus.ApplicationName
+//}))
 
-                    , PublisherSettings = new ShortBus.Default.RESTSettings() {
-                        URL = @"http://localhost:9876"
-                    }
-                }).RegisterMessage<ShortBus.TestMessage>("Default")
-            .MaxThreads(4);
+
+            Bus.Configure
+             .PersistTo(new MongoPersistProvider(@"mongodb://127.0.0.1:27017", MongoDataBaseName.UseExisting("ShortBus")))
+             .MyEndPoint(new ShortBus.Configuration.EndPoint() {
+                 EndPointAddress = @"http://localhost:9872"
+                 , EndPointType = ShortBus.Publish.EndPointTypeOptions.Source
+                 , Name = Bus.ApplicationName })
+             .AsASource
+             .RegisterPublisher(new RESTEndPoint(new RESTSettings() { URL = @"http://localhost:9876" }), "Default")
+             .RegisterMessage<ShortBus.TestMessage>("Default")
+             .MaxThreads(4);
+
+
 
 
             Bus.OnStarted += onStarted;

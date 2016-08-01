@@ -19,9 +19,11 @@ namespace ShortBus.Persistence {
 
         public PersistedMessage() {
             this.Id = Guid.NewGuid();
+            this.TransactionID = this.Id.ToString();
         }
         public PersistedMessage(string payLoad) {
             this.Id = Guid.NewGuid();
+            this.TransactionID = this.Id.ToString();
             this.PayLoad = payLoad;
         }
         public string Queue { get; set; }

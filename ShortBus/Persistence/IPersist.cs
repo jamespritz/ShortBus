@@ -1,4 +1,6 @@
-﻿using System;
+﻿using ShortBus.Configuration;
+using ShortBus.Publish;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -10,12 +12,17 @@ namespace ShortBus.Persistence {
 
 
     /// <summary>
+    /// implementation must provide constructor that 
+    /// </summary>
+    public interface IPeristProvider {
+        IPersist CreatePersist(IConfigure Configure, EndPointTypeOptions collectionType);
+
+    }
+
+    /// <summary>
     /// Operations required to perist a message to local storage
     /// </summary>
     public interface IPersist {
-
-        bool DBExists { get; }
-        bool CollectionExists { get; }
 
 
         void Persist(IEnumerable<PersistedMessage> messages);

@@ -7,52 +7,256 @@ using System.Threading.Tasks;
 using System.Transactions;
 using MongoDB.Driver;
 using MongoDB.Bson;
+using ShortBus.Configuration;
+using ShortBus.Publish;
 
 namespace ShortBus.Default {
 
-    public interface IMongoProvider {
-        IMongoClient GetClient();
+    public interface IMongoProvider<T> {
+        T GetClient();
 
 
     }
 
-    public class MongoProvider : IMongoProvider {
+    public class MongoProvider : IMongoProvider<IMongoClient> {
 
-        private MongoPersistSettings connx;
-        public MongoProvider(MongoPersistSettings setting) {
-            this.connx = null;
+        private string connx;
+        public MongoProvider(string connx) {
+            this.connx = connx;
         }
 
         private IMongoClient clientInstance = null;
         public IMongoClient GetClient() {
+
             if (clientInstance == null) {
-                clientInstance = new MongoClient(this.connx.ConnectionString);
+                clientInstance = new MongoClient(this.connx);
             }
             return clientInstance;
         }
-        //public IMongoCollection<T> GetCollection<T>() {
-        //    throw new NotImplementedException();
-        //}
-
-        //private IMongoDatabase dbInstance = null;
-        //public IMongoDatabase GetDatabase() {
-        //    if (dbInstance == null) {
-        //        IMongoClient client = this.GetClient();
-        //        dbInstance = client.GetDatabase(this.connx.DB);
-
-        //    }
-        //    return dbInstance;
-        //}
-    }
-
-
-    public class MongoPersistSettings {
-        public string ConnectionString { get;set; }
-        public string DB { get;set; }
-        public string Collection { get; set; }
 
     }
 
+
+    public struct MongoDataBaseName {
+
+        public const string CREATE = "CREATE";
+
+        private string db;
+        internal MongoDataBaseName(string db) {
+            this.db = db;
+        }
+
+        //i'm being lazy b/c i had overriding equals
+        public string DB {  get {
+                return this.db;
+            }
+        }
+
+        public static implicit operator MongoDataBaseName(string db) {
+            return new MongoDataBaseName(db);
+        }
+
+        public static MongoDataBaseName UseExisting(string db) {
+            return new MongoDataBaseName(db);
+        }
+        public static MongoDataBaseName Create() {
+            return new MongoDataBaseName(CREATE);
+        }
+
+        //public static bool operator ==(MongoDataBaseName first, string second) {
+        //    return first.db.Equals(second);
+        //}
+        //public static bool operator !=(MongoDataBaseName first, string second) {
+        //    return !first.db.Equals(second);
+        //}
+        //public override bool Equals(object obj) {
+            
+        //}
+    }
+
+    public class MongoPersistProvider : IPeristProvider {
+
+        private string server = string.Empty;
+        private MongoDataBaseName dbName = MongoDataBaseName.Create();
+
+        private IMongoProvider<IMongoClient> mongoProvider = null;
+
+        //provided for injecting a mock while testing
+        public IMongoProvider<IMongoClient> MongoProvider {
+            get {
+                return this.mongoProvider;
+            }
+            set {
+                this.mongoProvider = value;
+            }
+        }
+
+        public MongoPersistProvider(string server, MongoDataBaseName dbName) {
+            this.server = server;
+            this.dbName = dbName;
+        }
+
+        private string GetCollectionType(EndPointTypeOptions collectionType) {
+            string toReturn = string.Empty;
+            switch(collectionType) {
+                case EndPointTypeOptions.Publisher:
+                    toReturn = "Publish";
+                    break;
+                case EndPointTypeOptions.Source:
+                    toReturn = "Source";
+                    break;
+                case EndPointTypeOptions.Subscriber:
+                    toReturn = "Subscribe";
+                    break;
+
+            }
+            return toReturn;
+        }
+
+        IPersist IPeristProvider.CreatePersist(IConfigure Configure, EndPointTypeOptions collectionType) {
+
+
+            string collectionBase = string.Empty;
+
+            MongoPersist toReturn = null;
+            string collectionName = string.Empty;
+
+            bool CreateDatabase = this.dbName.DB == MongoDataBaseName.CREATE;
+            //if database provided, our collection names must be unique, so we factor in applicationname
+            if (!CreateDatabase) {
+          
+                collectionName = string.Format("{0}_{1}", Configure.ApplicationName, GetCollectionType(collectionType));
+
+            } else { //if we are creating database, our collectionname can be generic
+                this.dbName = Configure.ApplicationName;
+                collectionName = GetCollectionType(collectionType);
+            }
+
+
+
+
+            // #TODO: test if database exists and that it is not configured for another collection
+
+            this.mongoProvider = new MongoProvider(server);
+
+            ////if not createdatabase, then the one passed in must exist
+            //if (!CreateDatabase) {
+            //    if (!this.DBExists()) {
+            //        throw new Exception(string.Format("{0} does not exists", this.dbName.DB));
+            //    }
+            //}
+
+
+
+            if (this.CollectionExists(collectionName)) {
+
+                toReturn = new MongoPersist(new MongoSettings() { ServerName = this.server, DataBaseName = this.dbName.DB, CollectionName = collectionName });
+                EndpointConfigPersist<EndPointConfigBase> configReader = new EndpointConfigPersist<EndPointConfigBase>(toReturn);
+                //get config and ensure its the same
+                EndPointConfigBase config = configReader.GetConfig();
+
+                if (config.ApplicationGUID != Configure.ApplicationGUID) {
+                    throw new Exception("Collection exists but has already been configured for another process");
+                }
+
+            } else { //if not, we must create
+
+                //create collection   
+                IMongoDatabase db = this.mongoProvider.GetClient().GetDatabase(dbName.DB);             
+                db.CreateCollection(collectionName);
+                IMongoCollection<PersistedMessage> collection = db.GetCollection<PersistedMessage>(collectionName);
+
+                collection = this.CreateIndexes(collection);
+
+                toReturn = new MongoPersist(new MongoSettings() { ServerName = this.server, DataBaseName = this.dbName.DB, CollectionName = collectionName });
+                EndpointConfigPersist<EndPointConfigBase> configReader = new EndpointConfigPersist<EndPointConfigBase>(toReturn);
+                EndPointConfigBase config = new EndPointConfigBase() { ApplicationGUID = Configure.ApplicationGUID, ApplicationName = Configure.ApplicationName, Version = "1.0" };
+                configReader.UpdateConfig(config);
+            }
+
+            return toReturn;
+
+        }
+
+
+        public virtual IMongoCollection<PersistedMessage> CreateIndexes(IMongoCollection<PersistedMessage> collection) {
+            var keys = Builders<PersistedMessage>.IndexKeys;
+
+            var idxOrdinal = keys.Ascending(g => g.Ordinal);
+            var idxSend = keys.Ascending(g => g.Sent);
+            CreateIndexModel<PersistedMessage> idxModelOrdinal = new CreateIndexModel<PersistedMessage>(idxOrdinal);
+            CreateIndexModel<PersistedMessage> idxModelSend = new CreateIndexModel<PersistedMessage>(idxSend);
+
+            collection.Indexes.CreateMany(new CreateIndexModel<PersistedMessage>[] { idxModelOrdinal, idxModelSend });
+            return collection;
+
+        }
+
+        public bool DBExists() {
+
+
+            bool found = false;
+
+
+            IMongoClient client = this.MongoProvider.GetClient();
+
+            using (var cursor = client.ListDatabases()) {
+                while (cursor.MoveNext()) {
+                    foreach (BsonDocument i in cursor.Current) {
+                        string name = i["name"].ToString();
+
+                        if (name.Equals(dbName.DB, StringComparison.OrdinalIgnoreCase)) {
+                            found = true;
+
+                        }
+
+                    }
+                }
+            }
+
+            return found;
+
+        }
+
+
+
+        bool CollectionExists(string collectionName) {
+
+            bool collectionExists = false;
+
+
+
+            IMongoDatabase db = this.mongoProvider.GetClient().GetDatabase(this.dbName.DB);
+
+
+            using (var cursor = db.ListCollections()) {
+                while (cursor.MoveNext()) {
+                    foreach (BsonDocument i in cursor.Current) {
+                        string name = i["name"].ToString();
+
+                        if (name.Equals(collectionName, StringComparison.OrdinalIgnoreCase)) {
+                            collectionExists = true;
+
+                        }
+
+                    }
+                }
+
+                return collectionExists;
+
+            }
+        }
+
+
+
+    }
+
+    public struct MongoSettings {
+        public string ServerName { get; set; }
+        public string DataBaseName { get; set; }
+        public string CollectionName { get; set; }
+
+    }
 
     public class MongoPersist : IPersist {
 
@@ -61,16 +265,20 @@ namespace ShortBus.Default {
 
 
         private IMongoDatabase dbInstance = null;
-        private MongoPersistSettings settings = null;
+        private MongoSettings settings;
 
 
-        public MongoPersist(MongoPersistSettings settings ) {
+
+        public MongoPersist(MongoSettings settings) {
             this.settings = settings;
-            this.mongoProvider = new MongoProvider(settings);
+            this.mongoProvider = new MongoProvider(settings.ServerName);
         }
 
-        private IMongoProvider mongoProvider = null;
-        public IMongoProvider MongoProvider {
+
+        private IMongoProvider<IMongoClient> mongoProvider = null;
+
+        //provided for injecting a mock while testing
+        public IMongoProvider<IMongoClient> MongoProvider {
             get {
                 return this.mongoProvider;
             }
@@ -79,110 +287,33 @@ namespace ShortBus.Default {
 
         public IMongoDatabase GetDatabase() {
             if (this.dbInstance == null) {
-                this.dbInstance = MongoProvider.GetClient().GetDatabase(settings.DB);
+                this.dbInstance = MongoProvider.GetClient().GetDatabase(settings.DataBaseName);
             }
             return this.dbInstance;
         }
-        
 
 
-        public IMongoCollection<PersistedMessage> GetCollection() {
+
+
+        public virtual IMongoCollection<PersistedMessage> GetCollection() {
 
             IMongoCollection<PersistedMessage> collection = null;
             try {
 
                 IMongoDatabase db = this.GetDatabase();
 
-                if (!((IPersist)this).CollectionExists) {
-                    db.CreateCollection(this.settings.Collection);
-                    collection = db.GetCollection<PersistedMessage>(this.settings.Collection);
-
-                    var keys = Builders<PersistedMessage>.IndexKeys;
-
-                    var idxOrdinal = keys.Ascending(g => g.Ordinal);
-                    var idxSend = keys.Ascending(g => g.Sent);
-                    CreateIndexModel<PersistedMessage> idxModelOrdinal = new CreateIndexModel<PersistedMessage>(idxOrdinal);
-                    CreateIndexModel<PersistedMessage> idxModelSend = new CreateIndexModel<PersistedMessage>(idxSend);
-
-                    collection.Indexes.CreateMany(new CreateIndexModel<PersistedMessage>[] { idxModelOrdinal, idxModelSend });
-                    this.collectionExists = true;
-
-                }
+                collection = db.GetCollection<PersistedMessage>(this.settings.CollectionName);
 
 
-                if (collection == null) {
-                    collection = db.GetCollection<PersistedMessage>(this.settings.Collection);
-                    collectionExists = true;
-                }
-            
+
             } catch (Exception e) {
                 this.serviceDown = true;
                 throw new ServiceEndpointDownException("Mongo Persist Service is Down", e);
-            } 
+            }
             return collection;
         }
 
-        //async Task IPersist.PersistAsync(PersistedMessage message) {
-            
-        //    message.Sent = DateTime.UtcNow;
-        //    collection = this.GetCollection();
 
-            
-        //    await collection.InsertOneAsync(message);
-
-        //}
-
-        bool IPersist.DBExists {  get {
-
-                bool found = false;
-                
-
-                IMongoClient client = this.MongoProvider.GetClient();
-
-                using (var cursor = client.ListDatabases()) {
-                    while (cursor.MoveNext()) {
-                        foreach (BsonDocument i in cursor.Current) {
-                            string name = i["name"].ToString();
-
-                            if (name.Equals(this.settings.DB, StringComparison.OrdinalIgnoreCase)) {
-                                found = true;
-                                
-                            }
-                            
-                        }
-                    }
-                }
-            
-                return found;
-            }
-        }
-
-        public bool? collectionExists = null;
-        bool IPersist.CollectionExists {
-            get {
-
-                if (!this.collectionExists.HasValue) {
-                    this.collectionExists = false;
-                    IMongoDatabase db = this.GetDatabase();
-
-
-                    using (var cursor = db.ListCollections()) {
-                        while (cursor.MoveNext()) {
-                            foreach (BsonDocument i in cursor.Current) {
-                                string name = i["name"].ToString();
-
-                                if (name.Equals(this.settings.Collection, StringComparison.OrdinalIgnoreCase)) {
-                                    this.collectionExists = true;
-
-                                }
-
-                            }
-                        }
-                    }
-                }
-                return this.collectionExists.Value;
-            }
-        }
 
         void IPersist.Persist(IEnumerable<PersistedMessage> messages) {
 
@@ -191,10 +322,10 @@ namespace ShortBus.Default {
             }
 
 
-            
-            
 
-            
+
+
+
 
             IMongoCollection<PersistedMessage> collection = this.GetCollection();
 
@@ -211,7 +342,7 @@ namespace ShortBus.Default {
             }
         }
         //async Task<PersistedMessage> IPersist.GetNextAsync() {
-   
+
         //    collection = this.GetCollection();
 
         //    var qfilter = Builders<PersistedMessage>.Filter.Ne("Status", "1");
@@ -221,9 +352,9 @@ namespace ShortBus.Default {
         //        var update = Builders<PersistedMessage>.Update.Set(g => g.Status, 1);
         //        var ufilter = Builders<PersistedMessage>.Filter.Eq(g => g.Id, pop.Id);
         //        pop = await collection.FindOneAndUpdateAsync(ufilter, update);
-                
-               
-               
+
+
+
         //    }
         //    return pop;
 
@@ -263,7 +394,7 @@ namespace ShortBus.Default {
             }
 
             IMongoCollection<PersistedMessage> collection = this.GetCollection();
-       
+
             try {
                 FilterDefinitionBuilder<PersistedMessage> fBuilder = Builders<PersistedMessage>.Filter;
 
@@ -309,7 +440,7 @@ namespace ShortBus.Default {
 
             IMongoCollection<PersistedMessage> collection = this.GetCollection();
 
-            
+
 
             try {
                 FilterDefinitionBuilder<PersistedMessage> fBuilder = Builders<PersistedMessage>.Filter;
@@ -341,7 +472,7 @@ namespace ShortBus.Default {
 
                 var qfilter = fBuilder.And(fBuilder.Eq(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess), fBuilder.Eq(g => g.Queue, q), fBuilder.Lte(g => g.Sent, DateTime.UtcNow));
                 var sort = Builders<PersistedMessage>.Sort.Ascending(e => e.Sent).Ascending(e => e.Ordinal);
-                var options = new FindOptions<PersistedMessage>() {  Sort = sort };
+                var options = new FindOptions<PersistedMessage>() { Sort = sort };
 
                 Task<IAsyncCursor<PersistedMessage>> t = collection.FindAsync(qfilter, options);
                 t.Wait();
@@ -353,7 +484,7 @@ namespace ShortBus.Default {
                 }
                 return pop;
 
- 
+
             } catch (Exception e) {
                 this.serviceDown = true;
                 throw new ServiceEndpointDownException("Mongo Persist Service is Down", e);
@@ -362,16 +493,7 @@ namespace ShortBus.Default {
             return pop;
 
         }
-        //async Task<PersistedMessage> IPersist.PopAsync(Guid Id) {
-        //    collection = this.GetCollection();
-        //    var filter = Builders<PersistedMessage>.Filter.Eq(m => m.Id, Id);
 
-
-        //    var pop = await collection.FindOneAndDeleteAsync(filter);
-
-        //    return pop;
-
-        //}
         PersistedMessage IPersist.Pop(Guid Id) {
             if (this.serviceDown) {
                 throw new ServiceEndpointDownException("Mongo Persist Service is Down");
@@ -379,8 +501,8 @@ namespace ShortBus.Default {
 
             PersistedMessage pop = null;
             IMongoCollection<PersistedMessage> collection = this.GetCollection();
-            
-            try { 
+
+            try {
                 var filter = Builders<PersistedMessage>.Filter.Eq(m => m.Id, Id);
 
 
@@ -391,7 +513,7 @@ namespace ShortBus.Default {
             }
 
             return pop;
-            
+
         }
 
         PersistedMessage IPersist.Mark(Guid Id) {
@@ -406,7 +528,7 @@ namespace ShortBus.Default {
                 var update = Builders<PersistedMessage>.Update.Set(g => g.Status, PersistedMessageStatusOptions.Marked);
                 var filter = Builders<PersistedMessage>.Filter.Eq(m => m.Id, Id);
 
-             
+
                 collection.UpdateOne(filter, update);
 
             } catch (Exception e) {
@@ -456,14 +578,14 @@ namespace ShortBus.Default {
                     .Set(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess)
                     .Set(g => g.Sent, toSet)
                     .Inc(g => g.HandleRetryCount, 1);
-                 
 
-                    
+
+
                 var filter = Builders<PersistedMessage>.Filter.Eq(m => m.Id, Id);
 
 
                 var r = collection.UpdateOne(filter, update);
-                
+
             } catch (Exception e) {
                 this.serviceDown = true;
                 throw new ServiceEndpointDownException("Mongo Persist Service is Down", e);
@@ -480,18 +602,18 @@ namespace ShortBus.Default {
         bool IPersist.ResetConnection() {
             this.serviceDown = false;
 
-            
+
             dbInstance = null;
-            collectionExists = null;
+        
 
 
             try {
 
-                
+
                 ((IPersist)this).Persist(new PersistedMessage[] { new PersistedMessage("Test") { Sent = DateTime.UtcNow, Publisher = "diag_test" } });
                 PersistedMessage peeked = ((IPersist)this).PeekAndMarkNext("diag_test");
                 PersistedMessage popped = ((IPersist)this).Pop(peeked.Id);
-                
+
             } catch (Exception) {
                 this.serviceDown = true;
 
@@ -500,4 +622,6 @@ namespace ShortBus.Default {
 
         }
     }
+    
+
 }
