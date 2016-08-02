@@ -39,20 +39,20 @@ namespace ShortBus.Configuration {
             PersistedMessage oldConfig = db.PeekNext("config");
 
             PersistedMessage newConfig = new PersistedMessage(serialized) {
-                Distributed = null
-                , MessageHandler = null
-                , HandleRetryCount = 0
-                , Headers = new Dictionary<string, string>()
+
+                Headers = new Dictionary<string, string>()
                 , MessageType = typeName
                 , Ordinal = 0
-                , Published = null
-                , Publisher = null
-                , SendRetryCount = 0
-                , Sent = DateTime.UtcNow
+                , DateStamp = DateTime.UtcNow
                 , Status = PersistedMessageStatusOptions.ReadyToProcess
-                , Subscriber = null
                 , Queue = "config"
             };
+            newConfig.Routes.Add(new Route() {
+                EndPointName = "config",
+                EndPointType = Publish.EndPointTypeOptions.Handler
+                , Routed = DateTime.UtcNow
+            });
+
             db.Persist(new List<PersistedMessage>() { newConfig });
             //peek pulls latest anyway, so if this fails, no harm done
             if (oldConfig != null) {

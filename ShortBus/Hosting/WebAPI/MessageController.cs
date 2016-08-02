@@ -1,5 +1,6 @@
 ﻿using ShortBus.Persistence;
 using ShortBus.Publish;
+using ShortBus.Routing;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -11,21 +12,11 @@ namespace ShortBus.Hosting.WebAPI {
     public class MessageController : ApiController {
 
         [HttpPost]
-        public EndpointResponse PostMessage(PersistedMessage message) {
+        public RouteResponse PostMessage(PersistedMessage message) {
 
+            Bus.ReceiveMessage(message);
 
-            if (Bus.Configure.IsAPublisher) {
-                Bus.BroadcastMessage(message);
-            } else if (Bus.Configure.IsASubscriber) {
-                Bus.ReceiveMessage(message);
-            }
-            //if i am a publisher, broadcast
-            //if i am a subscriber, processMessage
-            //if i am both (test cases only)... inspect message... if sent != null, then i must be a subscriber
-
-            //ShortBus.Bus.BroadcastMessage(message);
-
-            return new EndpointResponse() { Status = true };
+            return new RouteResponse() { Status = true };
 
         }
 

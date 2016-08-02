@@ -96,24 +96,24 @@ namespace ShortBus.Default {
             this.dbName = dbName;
         }
 
-        private string GetCollectionType(EndPointTypeOptions collectionType) {
-            string toReturn = string.Empty;
-            switch(collectionType) {
-                case EndPointTypeOptions.Publisher:
-                    toReturn = "Publish";
-                    break;
-                case EndPointTypeOptions.Source:
-                    toReturn = "Source";
-                    break;
-                case EndPointTypeOptions.Subscriber:
-                    toReturn = "Subscribe";
-                    break;
+        //private string GetCollectionType(EndPointTypeOptions collectionType) {
+        //    string toReturn = string.Empty;
+        //    switch(collectionType) {
+        //        case EndPointTypeOptions.Publisher:
+        //            toReturn = "Publish";
+        //            break;
+        //        case EndPointTypeOptions.Source:
+        //            toReturn = "Source";
+        //            break;
+        //        case EndPointTypeOptions.Subscriber:
+        //            toReturn = "Subscribe";
+        //            break;
 
-            }
-            return toReturn;
-        }
+        //    }
+        //    return toReturn;
+        //}
 
-        IPersist IPeristProvider.CreatePersist(IConfigure Configure, EndPointTypeOptions collectionType) {
+        IPersist IPeristProvider.CreatePersist(IConfigure Configure) {
 
 
             string collectionBase = string.Empty;
@@ -125,11 +125,11 @@ namespace ShortBus.Default {
             //if database provided, our collection names must be unique, so we factor in applicationname
             if (!CreateDatabase) {
           
-                collectionName = string.Format("{0}_{1}", Configure.ApplicationName, GetCollectionType(collectionType));
+                collectionName = string.Format("{0}_{1}", Configure.ApplicationName, "messages");
 
             } else { //if we are creating database, our collectionname can be generic
                 this.dbName = Configure.ApplicationName;
-                collectionName = GetCollectionType(collectionType);
+                collectionName = "messages";
             }
 
 
@@ -183,7 +183,7 @@ namespace ShortBus.Default {
             var keys = Builders<PersistedMessage>.IndexKeys;
 
             var idxOrdinal = keys.Ascending(g => g.Ordinal);
-            var idxSend = keys.Ascending(g => g.Sent);
+            var idxSend = keys.Ascending(g => g.DateStamp);
             CreateIndexModel<PersistedMessage> idxModelOrdinal = new CreateIndexModel<PersistedMessage>(idxOrdinal);
             CreateIndexModel<PersistedMessage> idxModelSend = new CreateIndexModel<PersistedMessage>(idxSend);
 
@@ -331,7 +331,7 @@ namespace ShortBus.Default {
 
             try {
                 foreach (PersistedMessage m in messages) {
-                    m.Sent = DateTime.UtcNow;
+                    m.DateStamp = DateTime.UtcNow;
                 }
 
                 collection.InsertMany(messages);
@@ -372,9 +372,9 @@ namespace ShortBus.Default {
             try {
                 FilterDefinitionBuilder<PersistedMessage> fBuilder = Builders<PersistedMessage>.Filter;
 
-                var qfilter = fBuilder.And(fBuilder.Eq(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess), fBuilder.Eq(g => g.Queue, q), fBuilder.Lte(g => g.Sent, DateTime.UtcNow));
+                var qfilter = fBuilder.And(fBuilder.Eq(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess), fBuilder.Eq(g => g.Queue, q), fBuilder.Lte(g => g.DateStamp, DateTime.UtcNow));
                 var update = Builders<PersistedMessage>.Update.Set(g => g.Status, PersistedMessageStatusOptions.Marked);
-                var sort = Builders<PersistedMessage>.Sort.Ascending(e => e.Sent).Ascending(e => e.Ordinal);
+                var sort = Builders<PersistedMessage>.Sort.Ascending(e => e.DateStamp).Ascending(e => e.Ordinal);
                 var options = new FindOneAndUpdateOptions<PersistedMessage>() { ReturnDocument = ReturnDocument.After, Sort = sort };
 
                 pop = collection.FindOneAndUpdate(qfilter, update, options);
@@ -470,8 +470,8 @@ namespace ShortBus.Default {
             try {
                 FilterDefinitionBuilder<PersistedMessage> fBuilder = Builders<PersistedMessage>.Filter;
 
-                var qfilter = fBuilder.And(fBuilder.Eq(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess), fBuilder.Eq(g => g.Queue, q), fBuilder.Lte(g => g.Sent, DateTime.UtcNow));
-                var sort = Builders<PersistedMessage>.Sort.Ascending(e => e.Sent).Ascending(e => e.Ordinal);
+                var qfilter = fBuilder.And(fBuilder.Eq(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess), fBuilder.Eq(g => g.Queue, q), fBuilder.Lte(g => g.DateStamp, DateTime.UtcNow));
+                var sort = Builders<PersistedMessage>.Sort.Ascending(e => e.DateStamp).Ascending(e => e.Ordinal);
                 var options = new FindOptions<PersistedMessage>() { Sort = sort };
 
                 Task<IAsyncCursor<PersistedMessage>> t = collection.FindAsync(qfilter, options);
@@ -576,8 +576,8 @@ namespace ShortBus.Default {
                 DateTime toSet = DateTime.UtcNow.Add(fromnNow);
                 var update = Builders<PersistedMessage>.Update
                     .Set(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess)
-                    .Set(g => g.Sent, toSet)
-                    .Inc(g => g.HandleRetryCount, 1);
+                    .Set(g => g.DateStamp, toSet)
+                    .Inc(g => g.RetryCount, 1);
 
 
 
@@ -610,7 +610,7 @@ namespace ShortBus.Default {
             try {
 
 
-                ((IPersist)this).Persist(new PersistedMessage[] { new PersistedMessage("Test") { Sent = DateTime.UtcNow, Publisher = "diag_test" } });
+                ((IPersist)this).Persist(new PersistedMessage[] { new PersistedMessage("Test") { Queue = "diag_test" , DateStamp = DateTime.UtcNow } });
                 PersistedMessage peeked = ((IPersist)this).PeekAndMarkNext("diag_test");
                 PersistedMessage popped = ((IPersist)this).Pop(peeked.Id);
 

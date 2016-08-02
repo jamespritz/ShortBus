@@ -15,7 +15,7 @@ namespace ShortBus.Persistence {
     /// implementation must provide constructor that 
     /// </summary>
     public interface IPeristProvider {
-        IPersist CreatePersist(IConfigure Configure, EndPointTypeOptions collectionType);
+        IPersist CreatePersist(IConfigure Configure);
 
     }
 

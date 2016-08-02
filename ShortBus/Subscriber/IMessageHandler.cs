@@ -1,4 +1,5 @@
-﻿using System;
+﻿using ShortBus.Publish;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -12,7 +13,7 @@ namespace ShortBus.Subscriber {
 
     }
 
-    public interface IMessageHandler {
+    public interface IMessageHandler: IEndPoint {
 
         bool Parallel { get; }
         HandlerResponse Handle(Persistence.PersistedMessage message);

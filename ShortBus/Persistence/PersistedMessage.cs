@@ -1,4 +1,5 @@
-﻿using System;
+﻿using ShortBus.Publish;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -14,31 +15,45 @@ namespace ShortBus.Persistence {
         Processing = 2,
         Exception = 3
     }
-    
+
+    //handler, type, date, retrycount
+    public struct Route {
+        public string EndPointName { get; set; }
+        public DateTime? Routed { get; set; }
+        public EndPointTypeOptions EndPointType { get; set; }
+
+    }
+
     public class PersistedMessage {
 
+        
         public PersistedMessage() {
             this.Id = Guid.NewGuid();
             this.TransactionID = this.Id.ToString();
+            this.Routes = new List<Route>();
+            this.RetryCount = 0;
+
         }
         public PersistedMessage(string payLoad) {
             this.Id = Guid.NewGuid();
             this.TransactionID = this.Id.ToString();
             this.PayLoad = payLoad;
+            this.Routes = new List<Route>();
+            this.RetryCount = 0;
+
         }
         public string Queue { get; set; }
         public Guid Id { get;set; }
-        public DateTime Sent { get;set; }
-        public DateTime? Published { get;set; }
-        public DateTime? Distributed { get; set; }
-        public DateTime? Received { get; set; }
-        public int SendRetryCount { get;set; }
+
+        public int RetryCount { get; set; }
+
+        public DateTime DateStamp { get; set; }
+
         public string PayLoad { get;set; }
         public Dictionary<string,string> Headers = new Dictionary<string, string>();
-        public int HandleRetryCount { get;set; }
-        public string Publisher { get; set; }
-        public string Subscriber { get; set; }
-        public string MessageHandler { get; set; }
+
+        public List<Route> Routes { get; set; }
+
         public int Ordinal { get; set; }
         public string TransactionID { get; set; }
         public string MessageType { get;set; }
@@ -52,25 +67,25 @@ namespace ShortBus.Persistence {
 
         public PersistedMessage Clone() {
 
-            return new PersistedMessage() {
-                MessageHandler = this.MessageHandler
-                , HandleRetryCount = this.HandleRetryCount
-                , Headers = this.Headers
+            PersistedMessage toReturn =  new PersistedMessage() {
+
+                Headers = this.Headers
                 , Id = Guid.NewGuid()
-                , Distributed = this.Distributed
                 , MessageType = this.MessageType
                 , Ordinal = this.Ordinal
                 , PayLoad = this.PayLoad
-                , Published = this.Published
-                , Publisher = this.Publisher
-                , SendRetryCount = this.SendRetryCount
-                , Sent = this.Sent
                 , Status = this.Status
-                , Subscriber = this.Subscriber
+                , DateStamp = this.DateStamp
                 , Queue = this.Queue
                 , TransactionID = this.TransactionID
-                , Received = this.Received
+                
             };
+
+            this.Routes.ForEach(g => {
+                toReturn.Routes.Add(g);
+            });
+
+            return toReturn;
 
         }
     }

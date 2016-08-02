@@ -274,24 +274,27 @@ namespace Sandbox {
 
 
 
-//            new MongoPersist(new MongoPersistSettings() {
-//                Collection = "source", ConnectionString = @"mongodb://127.0.0.1:27017", DB = Bus.ApplicationName
-//            })
-//                 , new MongoPersist(new MongoPersistSettings() {
-//    Collection = "config", ConnectionString = @"mongodb://127.0.0.1:27017", DB = Bus.ApplicationName
-//}))
+            //            new MongoPersist(new MongoPersistSettings() {
+            //                Collection = "source", ConnectionString = @"mongodb://127.0.0.1:27017", DB = Bus.ApplicationName
+            //            })
+            //                 , new MongoPersist(new MongoPersistSettings() {
+            //    Collection = "config", ConnectionString = @"mongodb://127.0.0.1:27017", DB = Bus.ApplicationName
+            //}))
 
 
             Bus.Configure
              .PersistTo(new MongoPersistProvider(@"mongodb://127.0.0.1:27017", MongoDataBaseName.UseExisting("ShortBus")))
+             .MaxThreads(4)
              .MyEndPoint(new ShortBus.Configuration.EndPoint() {
                  EndPointAddress = @"http://localhost:9872"
                  , EndPointType = ShortBus.Publish.EndPointTypeOptions.Source
-                 , Name = Bus.ApplicationName })
-             .AsASource
-             .RegisterPublisher(new RESTEndPoint(new RESTSettings() { URL = @"http://localhost:9876" }), "Default")
-             .RegisterMessage<ShortBus.TestMessage>("Default")
-             .MaxThreads(4);
+                 , Name = Bus.ApplicationName
+             })
+
+             .RegisterEndpoint("Default", new RESTEndPoint(new RESTSettings(@"http://localhost:9876", ShortBus.Publish.EndPointTypeOptions.Publisher)))
+             .RouteMessage<ShortBus.TestMessage>("Default", false);
+             
+            
 
 
 

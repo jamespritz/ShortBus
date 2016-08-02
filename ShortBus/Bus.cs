@@ -13,6 +13,7 @@ using System.Collections.Concurrent;
 using ShortBus.Default;
 using ShortBus.Subscriber;
 using System.Transactions;
+using ShortBus.Routing;
 
 namespace ShortBus {
 
@@ -92,12 +93,11 @@ namespace ShortBus {
         public delegate void ThreadStarted(object sender, EventArgs args);
         public static event ThreadStarted OnThreadStarted;
 
-        //Lets the subscriber know to restart processing after a new subscription is created
-        //Timer the handler for new subscriptions will start the timer to restart processing
-        private static volatile bool newSubscribers = false;
-        private static System.Timers.Timer publisherRestartTimer = new System.Timers.Timer();
-        private static System.Timers.Timer subscriberRestartTimer = null;
+
+        private static System.Timers.Timer restartTimer = new System.Timers.Timer();
         
+
+        private static int maxThreads = 1;
 
         static Bus() {
 
@@ -131,20 +131,27 @@ namespace ShortBus {
         /// A subscription request will stop all processing to allow the new subscription
         /// to be registered, then the Bus will restart processing.
         /// </summary>
-        class SubscriptionSubscriber : IEndPoint {
-            EndpointResponse IEndPoint.HelloWorld(PersistedMessage message) {
-                return new EndpointResponse() { Status = true, PayLoad = null };
+        class SubscriptionHandler : IMessageHandler {
+            EndPointTypeOptions IEndPoint.EndPointType {
+                get {
+                    return EndPointTypeOptions.Handler;
+                }
             }
 
-            EndpointResponse IEndPoint.Publish(PersistedMessage message) {
+            bool IMessageHandler.Parallel {
+                get {
+                    return false;
+                }
+            }
 
+            HandlerResponse IMessageHandler.Handle(PersistedMessage message) {
                 /* subscriber is requesting that I (as a publisher) send messages its way.
-                 * I have to make sure the subscription is persisted, and added to my in memory subscribers
-                */
+                               * I have to make sure the subscription is persisted, and added to my in memory subscribers
+                              */
                 string payLoad = message.PayLoad;
                 SubscriptionRequest request = Newtonsoft.Json.JsonConvert.DeserializeObject<SubscriptionRequest>(payLoad);
 
-                EndpointConfigPersist<EndPointConfig> config = new EndpointConfigPersist<EndPointConfig>(configure.publisher_LocalStorage);
+                EndpointConfigPersist<EndPointConfig> config = new EndpointConfigPersist<EndPointConfig>(configure.Persitor);
                 EndPointConfig stored = config.GetConfig();
 
                 bool changed = false;
@@ -177,21 +184,19 @@ namespace ShortBus {
 
 
 
-                    MessageTypeMapping c = configure.Subscriptions.FirstOrDefault(g => g.EndPointName.Equals(request.Name, StringComparison.OrdinalIgnoreCase) && g.TypeName.Equals(request.MessageTypeName, StringComparison.OrdinalIgnoreCase));
+                    MessageTypeMapping c = configure.Routes.FirstOrDefault(g => g.EndPointName.Equals(request.Name, StringComparison.OrdinalIgnoreCase) && g.TypeName.Equals(request.MessageTypeName, StringComparison.OrdinalIgnoreCase));
                     if (!string.IsNullOrEmpty(c.EndPointName)) {
-                        configure.Subscriptions.Remove(c);
+                        configure.Routes.Remove(c);
                     }
                     //if no other subscriptions, remove subscriber
-                    if (!configure.Subscriptions.Any(g => g.EndPointName.Equals(request.Name, StringComparison.OrdinalIgnoreCase))) {
+                    if (!configure.Routes.Any(g => g.EndPointName.Equals(request.Name, StringComparison.OrdinalIgnoreCase))) {
                         IEndPoint toRemove = null;
                         pubStat statToRemove;
-                        subscribersRunning.TryRemove(request.Name, out statToRemove);
-                        currentSubscriber = 0;
-                        configure.Subscribers.TryRemove(request.Name, out toRemove);
-                        
-                    }
+                        endPointsRunning.TryRemove(request.Name, out statToRemove);
+                        currentEndpoint = 0;
+                        configure.EndPoints.TryRemove(request.Name, out toRemove);
 
-                    newSubscribers = true;
+                    }
 
 
 
@@ -206,14 +211,14 @@ namespace ShortBus {
                     subscriberStored = stored.Subscribers().Any(g => g.Name.Equals(request.Name, StringComparison.OrdinalIgnoreCase));
                     subscriptionStored = stored.Subscriptions.Any(g => g.TypeName.Equals(request.MessageTypeName, StringComparison.Ordinal)
                         && g.EndPointName.Equals(request.Name, StringComparison.OrdinalIgnoreCase));
-                    
+
                     if (!subscriberStored) {
                         stored.AddEndPoint(new EndPoint() {
                             Name = request.Name
                                 , EndPointAddress = request.EndPoint
-                                , EndPointType = EndPointTypeOptions.Subscriber
+                                , EndPointType = request.EndPointType
                         });
-                        
+
                         changed = true;
                     } else {
                         //if subscriber stored... make sure the endpoint is the same...
@@ -223,14 +228,14 @@ namespace ShortBus {
                             stored.AddEndPoint(new EndPoint() {
                                 Name = request.Name
                                 , EndPointAddress = request.EndPoint
-                                , EndPointType = EndPointTypeOptions.Subscriber
+                                , EndPointType = request.EndPointType
                             });
-                            
+
                             changed = true;
                         }
                     }
                     if (!subscriptionStored) {
-                        
+
                         stored.Subscriptions.Add(new MessageTypeMapping() { EndPointName = request.Name, TypeName = request.MessageTypeName, DiscardIfDown = request.DiscardIfSubscriberIsDown });
                         changed = true;
                     }
@@ -240,108 +245,87 @@ namespace ShortBus {
 
 
                     //if subscriber not registered, add it
-                    IEndPoint registeredSubscriber = configure.Subscribers.FirstOrDefault(g => g.Key.Equals(request.Name, StringComparison.OrdinalIgnoreCase)).Value;
+                    IEndPoint registeredSubscriber = configure.EndPoints.FirstOrDefault(g => g.Key.Equals(request.Name, StringComparison.OrdinalIgnoreCase)).Value;
                     if (registeredSubscriber == null) {
-                        IEndPoint toAdd = new RESTEndPoint(new RESTSettings() { URL = request.EndPoint });
+                        IEndPoint toAdd = new RESTEndPoint(new RESTSettings(request.EndPoint, request.EndPointType));
 
-                        ((IPublisherConfigure)configure).RegisterSubscriber(request.Name, toAdd);
+                        ((IConfigure)configure).RegisterEndpoint(request.Name, toAdd);
 
-                        subscribersRunning.AddOrUpdate(request.Name, new pubStat() { Has = true, Processing = false }, (r, z) => { return new pubStat() { Has = true, Processing = false }; });
+                        endPointsRunning.AddOrUpdate(request.Name, new pubStat() { Has = true, Processing = false }, (r, z) => { return new pubStat() { Has = true, Processing = false }; });
 
-                    } 
-
-                    if (!configure.Subscribers.Any(g => g.Key.Equals(request.Name, StringComparison.OrdinalIgnoreCase))) {
-                        IEndPoint toAdd = new RESTEndPoint(new RESTSettings() { URL = request.EndPoint });
-
-                        ((IPublisherConfigure)configure).RegisterSubscriber(request.Name, toAdd);
-
-                        subscribersRunning.AddOrUpdate(request.Name, new pubStat() { Has = true, Processing = false }, (r, z) => { return new pubStat() { Has = true, Processing = false }; });
-                        
-                        
                     }
 
-                    MessageTypeMapping c = configure.Subscriptions.FirstOrDefault(g => g.EndPointName.Equals(request.Name, StringComparison.OrdinalIgnoreCase) && g.TypeName.Equals(request.MessageTypeName, StringComparison.OrdinalIgnoreCase));
+                    if (!configure.EndPoints.Any(g => g.Key.Equals(request.Name, StringComparison.OrdinalIgnoreCase))) {
+                        IEndPoint toAdd = new RESTEndPoint(new RESTSettings(request.EndPoint, request.EndPointType));
+
+                        ((IConfigure)configure).RegisterEndpoint(request.Name, toAdd);
+
+                        endPointsRunning.AddOrUpdate(request.Name, new pubStat() { Has = true, Processing = false }, (r, z) => { return new pubStat() { Has = true, Processing = false }; });
+
+
+                    }
+
+                    MessageTypeMapping c = configure.Routes.FirstOrDefault(g => g.EndPointName.Equals(request.Name, StringComparison.OrdinalIgnoreCase) && g.TypeName.Equals(request.MessageTypeName, StringComparison.OrdinalIgnoreCase));
                     if (c == null) {
-                        ((IPublisherConfigureInternal)configure).RegisterMessage(request.MessageTypeName, request.Name, request.DiscardIfSubscriberIsDown);
-                        
+                        ((IConfigureInternal)configure).RouteMessage(request.MessageTypeName, request.Name, request.DiscardIfSubscriberIsDown);
+
                     }
 
                     //if the endpoint was down, reset it (since we now know its up)
-                    IEndPoint subscriber = configure.Subscribers.FirstOrDefault(g => g.Key.Equals(request.Name, StringComparison.OrdinalIgnoreCase)).Value;
-                   
-                    subscriber.ResetConnection(request.EndPoint);
+                    IEndPoint subscriber = configure.EndPoints.FirstOrDefault(g => g.Key.Equals(request.Name, StringComparison.OrdinalIgnoreCase)).Value;
+
+                    ((IMessageRouter)subscriber).ResetConnection(request.EndPoint);
                     //unmark all messages so bus resends
-                    configure.publisher_LocalStorage.UnMarkAll(request.Name);
+                    configure.Persitor.UnMarkAll(request.Name);
 
 
-                    subscribersRunning.AddOrUpdate(request.Name, new pubStat() { Has = true, Processing = false }, (k, v) => {
+                    endPointsRunning.AddOrUpdate(request.Name, new pubStat() { Has = true, Processing = false }, (k, v) => {
                         return new pubStat() { Has = true, Processing = false };
                     });
 
 
-              
-
-                    newSubscribers = true;
-
                 }
 
-                return new EndpointResponse() { Status = true };
-   
+                return HandlerResponse.Handled();
             }
 
-            //running in process
-            bool IEndPoint.ResetConnection() {
-                return true;
-            }
-            bool IEndPoint.ResetConnection(string endPointAddress) {
-                return true;
+
+
+        }
+
+        class EndpointRegistrationHandler : IMessageHandler {
+            EndPointTypeOptions IEndPoint.EndPointType {
+                get {
+                    return EndPointTypeOptions.Handler;
+                }
             }
 
-            bool IEndPoint.ServiceIsDown() {
-                return false;
+            bool IMessageHandler.Parallel {
+                get {
+                    return false;
+                }
+            }
+
+            HandlerResponse IMessageHandler.Handle(PersistedMessage message) {
+                throw new NotImplementedException();
             }
         }
 
-        class EndpointRegistrationSubscriber : IEndPoint {
-            EndpointResponse IEndPoint.HelloWorld(PersistedMessage message) {
-                return new EndpointResponse() { Status = true, PayLoad = null };
-            }
-
-            EndpointResponse IEndPoint.Publish(PersistedMessage message) {
-
-                /* source is requesting that I (as a publisher) publish it's messaged
-                 * I have to make sure the endpoint is registered so I can call back if needed.
-                */
-                string payLoad = message.PayLoad;
-                EndpointRegistrationRequest request = Newtonsoft.Json.JsonConvert.DeserializeObject<EndpointRegistrationRequest>(payLoad);
-
-                EndpointConfigPersist<EndPointConfig> config = new EndpointConfigPersist<EndPointConfig>(configure.publisher_LocalStorage);
-                EndPointConfig stored = config.GetConfig();
-
-                bool changed = false;
-                if (request.DeRegister) {
-
-                  
-
-                } else {
-                   
-
+        class PingHandler : IMessageHandler {
+            EndPointTypeOptions IEndPoint.EndPointType {
+                get {
+                    return EndPointTypeOptions.Handler;
                 }
-
-                return new EndpointResponse() { Status = true };
-
             }
 
-            //running in process
-            bool IEndPoint.ResetConnection() {
-                return true;
-            }
-            bool IEndPoint.ResetConnection(string endPointAddress) {
-                return true;
+            bool IMessageHandler.Parallel {
+                get {
+                    return false;
+                }
             }
 
-            bool IEndPoint.ServiceIsDown() {
-                return false;
+            HandlerResponse IMessageHandler.Handle(PersistedMessage message) {
+                throw new NotImplementedException();
             }
         }
 
@@ -354,7 +338,7 @@ namespace ShortBus {
         private static DateTime padTime = DateTime.Now;
         private static int SyncGetPadding() {
 
-            lock (sourceLock) {
+            lock (lockObj) {
                 ordinal++;
                 TimeSpan span = DateTime.Now - padTime;
                 if (span.TotalSeconds > 5) {
@@ -368,42 +352,29 @@ namespace ShortBus {
 
 
         //syncronization mechanism
-        private readonly static object sourceLock = new object();
+        private readonly static object lockObj = new object();
         private static CancellationTokenSource CTS = null;
         private static bool stopped = true;
         private static bool stopping = false;
         private static ManualResetEvent allStopped = new ManualResetEvent(true);
 
-        
+
+        private static AutoResetEvent resetEvent = new AutoResetEvent(false);
+        private static List<Task> taskThreads = null;
+        private static ConcurrentDictionary<int, bool> taskThreadsRunning = null;
+        private static ConcurrentDictionary<string, pubStat> endPointsRunning = null;
+        private static int currentEndpoint = 0;
+
+
+
         private static void ResolvePersistedConfig() {
-            if (configure.IsASource) {
+            
                 
                 EndPointConfig stored = null;
-                EndpointConfigPersist<EndPointConfig> sourceConfig = new EndpointConfigPersist<EndPointConfig>(configure.source_LocalStorage);
+                EndpointConfigPersist<EndPointConfig> config = new EndpointConfigPersist<EndPointConfig>(configure.Persitor);
                 
 
-                stored = sourceConfig.GetConfig();
-                if (stored == null) {
-                    stored = new EndPointConfig() {
-                        ApplicationGUID = ((IConfigure)configure).ApplicationGUID
-                        , ApplicationName = ((IConfigure)configure).ApplicationName
-                        , Version = "1.0"
-                    };
-                    sourceConfig.UpdateConfig(stored);
-                }
-
-                
-                
-
-            }
-
-            if (configure.IsAPublisher) {
-
-                EndPointConfig stored = null;
-                EndpointConfigPersist<EndPointConfig> pubConfig = new EndpointConfigPersist<EndPointConfig>(configure.publisher_LocalStorage);
-
-
-                stored = pubConfig.GetConfig();
+                stored = config.GetConfig();
                 if (stored == null) {
                     stored = new EndPointConfig() {
                         ApplicationGUID = ((IConfigure)configure).ApplicationGUID
@@ -412,52 +383,33 @@ namespace ShortBus {
                         , EndPoints = new List<EndPoint>()
                         , Subscriptions = new List<MessageTypeMapping>()
                     };
-                    pubConfig.UpdateConfig(stored);
+                    config.UpdateConfig(stored);
                 }
 
+   
+
+
                 foreach (EndPoint s in stored.Subscribers()) {
-                    ((IPublisherConfigure)configure).RegisterSubscriber(s.Name, new RESTEndPoint(new RESTSettings() { URL = s.EndPointAddress }));
+                    ((IConfigure)configure).RegisterEndpoint(s.Name, new RESTEndPoint(new RESTSettings(s.EndPointAddress, s.EndPointType )));
 
                 }
                 foreach (MessageTypeMapping map in stored.Subscriptions) {
-                    ((IPublisherConfigureInternal)configure).RegisterMessage(map.TypeName, map.EndPointName, map.DiscardIfDown);
+                    ((IConfigureInternal)configure).RouteMessage(map.TypeName, map.EndPointName, map.DiscardIfDown);
                 }
 
 
-            }
 
-            if (configure.IsASubscriber) {
-
-                EndPointConfig stored = null;
-                EndpointConfigPersist<EndPointConfig> subConfig = new EndpointConfigPersist<EndPointConfig>(configure.subscriber_LocalStorage);
-
-
-                stored = subConfig.GetConfig();
-                if (stored == null) {
-                    stored = new EndPointConfig() {
-                        ApplicationGUID = ((IConfigure)configure).ApplicationGUID
-                        , ApplicationName = ((IConfigure)configure).ApplicationName
-                        , Version = "1.0"
-                    };
-                    subConfig.UpdateConfig(stored);
-                }
-
-            }
+            
         }
 
         private static bool AllThreadsAreStopped() {
 
             bool allThreadsAreStopped = true;
-            if (pubThreadsRunning != null && pubThreadsRunning.Count() > 0) {
-                allThreadsAreStopped = allThreadsAreStopped && (!pubThreadsRunning.Any(g => g.Value));
+            if (taskThreadsRunning != null && taskThreadsRunning.Count() > 0) {
+                allThreadsAreStopped = allThreadsAreStopped && (!taskThreadsRunning.Any(g => g.Value));
 
             }
-            if (sourceThreadsRunning != null && sourceThreadsRunning.Count() > 0) {
-                allThreadsAreStopped = allThreadsAreStopped && (!sourceThreadsRunning.Any(g => g.Value));
-            }
-            if (subThreadsRunning != null && subThreadsRunning.Count() > 0) {
-                allThreadsAreStopped = allThreadsAreStopped && (!subThreadsRunning.Any(g => g.Value));
-            }
+
             return allThreadsAreStopped;
         }
 
@@ -469,14 +421,12 @@ namespace ShortBus {
                 if (stopping) {
                     allStopped.Set();
                 } else { //if we are stopping the bus, don't restart the threads... that would be silly!
-                    if (newSubscribers && publisherRestartTimer != null) {
-                        newSubscribers = false;
 
-                        publisherRestartTimer.Start();
+                    //otherwise, start the restart timer 
+                    if (restartTimer != null) {
+                        restartTimer.Start();
                     }
-                    if (subscriberRestartTimer != null) {
-                        subscriberRestartTimer.Start();
-                    }
+
                 }
             }
 
@@ -528,23 +478,85 @@ namespace ShortBus {
 
         }
 
+        private static void Ping() {
+            ////submit subscription requests
+            //configure.Subscriptions.ForEach((s) => {
+
+            //    if (configure.Publishers.ContainsKey(s.EndPointName)) {
+            //        IEndPoint publisher = configure.Publishers[s.EndPointName];
+            //        if (!publisher.ServiceIsDown()) {
+            //            //??? how to do unsubscribe
+            //            SubscriptionRequest request = new SubscriptionRequest() {
+            //                EndPoint = configure.myEndPoint.EndPointAddress
+            //                , DiscardIfSubscriberIsDown = s.DiscardIfDown
+            //                , GUID = Util.Util.GetApplicationGuid()
+            //                , MessageTypeName = s.TypeName
+            //                , Name = ApplicationName
+            //                , EndPointType = configure.myEndPoint.EndPointType
+            //                , DeRegister = false
+            //            };
+            //            string payLoad = JsonConvert.SerializeObject(request);
+            //            PersistedMessage msg = new PersistedMessage() {
+            //                HandleRetryCount = 0
+            //                , Headers = new Dictionary<string, string>()
+            //                , MessageType = Util.Util.GetTypeName(typeof(SubscriptionRequest))
+            //                , Ordinal = 0
+            //                , PayLoad = payLoad
+            //                , Publisher = s.EndPointName
+            //                , SendRetryCount = 0
+            //                , Status = PersistedMessageStatusOptions.ReadyToProcess
+            //            };
+            //            publisher.Publish(msg);
+            //        }
+            //    }
+
+
+            //});
+        }
+
+        private static void Subscribe() {
+            //submit subscription requests
+            configure.Routes.ForEach((s) => {
+
+                if (configure.EndPoints.ContainsKey(s.EndPointName)) {
+                    IEndPoint publisher = configure.EndPoints[s.EndPointName];
+                    if (!((IMessageRouter)publisher).ServiceIsDown()) {
+                        //??? how to do unsubscribe
+                        SubscriptionRequest request = new SubscriptionRequest() {
+                            EndPoint = configure.myEndPoint.EndPointAddress
+                            , DiscardIfSubscriberIsDown = s.DiscardIfDown
+                            , GUID = Util.Util.GetApplicationGuid()
+                            , MessageTypeName = s.TypeName
+                            , Name = ApplicationName
+                            , EndPointType = configure.myEndPoint.EndPointType
+                            , DeRegister = false
+                        };
+                        string payLoad = JsonConvert.SerializeObject(request);
+                        PersistedMessage msg = new PersistedMessage() {
+                          
+                            Headers = new Dictionary<string, string>()
+                            , MessageType = Util.Util.GetTypeName(typeof(SubscriptionRequest))
+                            , Ordinal = 0
+                            , DateStamp = DateTime.UtcNow
+                            , PayLoad = payLoad
+                            , Status = PersistedMessageStatusOptions.ReadyToProcess
+                        };
+
+                        ((IMessageRouter)publisher).Publish(msg);
+                    }
+                }
+
+
+            });
+        }
+
         public static void Start() {
 
 
-            if (configure.IsASource) {
-                configure.TestSourceConfig();
-            }
-           
-            if (configure.IsASubscriber) {   
-                configure.TestSubscriberConfig();
-            }
-            
-            if (configure.IsAPublisher) {
-                configure.TestPublisherConfig();
-            }
-            
-            
-            
+            configure.TestConfig();
+
+
+            maxThreads = configure.MaxThreads;// configure.Publishers.Count > configure.maxSourceThreads ? configure.maxSourceThreads : configure.Publishers.Count;
 
             stopped = false;
 
@@ -557,160 +569,88 @@ namespace ShortBus {
             //get any stored config before starting
             ResolvePersistedConfig();
 
-            if (configure.IsASource) {
+            taskThreads = new List<Task>();
+            taskThreadsRunning = new ConcurrentDictionary<int, bool>();
+            for (int i = 1; i <= maxThreads; i++) {
+                taskThreads.Add(null);
+                taskThreadsRunning.AddOrUpdate(i, true, (c, z) => { return true; });
+            }
 
-                //if fewer publishers than max, only create threads for each pub.  otherwise, max 
-                maxSourceThreads = configure.maxSourceThreads;// configure.Publishers.Count > configure.maxSourceThreads ? configure.maxSourceThreads : configure.Publishers.Count;
-                sourceThreads = new List<Task>();
-                sourceThreadsRunning = new ConcurrentDictionary<int, bool>();
-                publishersRunning = new ConcurrentDictionary<string, pubStat>();
+            endPointsRunning = new ConcurrentDictionary<string, pubStat>();
 
-                
 
-                for (int i = 1; i <= maxSourceThreads; i++) {
-                    sourceThreads.Add(null);
-                    sourceThreadsRunning.AddOrUpdate(i, true, (c, z) => { return true; });
+            ((IConfigure)configure).RegisterMessageHandler<EndpointPingRequest>(new PingHandler());
+            //add subscriptions for subscribe/unsubscribe
+            ((IConfigure)configure).RegisterMessageHandler<SubscriptionRequest>(new SubscriptionHandler());
+            ((IConfigure)configure).RegisterMessageHandler<EndpointRegistrationRequest>(new EndpointRegistrationHandler());
+
+
+            configure.EndPoints.ToList().ForEach(k => {
+
+                endPointsRunning.AddOrUpdate(k.Key, new pubStat() { Has = true, Processing = false }, (c, z) => { return new pubStat() { Has = true, Processing = false }; });
+
+            });
+
+            Ping();
+            Subscribe();
+
+            configure.Persitor.UnMarkAll();
+
+            restartTimer = new System.Timers.Timer();
+            restartTimer.Interval = 1000;
+            restartTimer.Enabled = true;
+            restartTimer.AutoReset = false;
+            restartTimer.Elapsed += Restart;
+     
+        }
+
+        private static void Restart(object sender, System.Timers.ElapsedEventArgs e) {
+            StartProcessing();
+        }
+
+        private static void StartProcessing() {
+
+            for (int i = 1; i <= maxThreads; i++) {
+
+                Task t = taskThreads[i - 1];
+                if (t == null || t.IsCompleted) {
+                    //t = new Thread(PublishNext);
+
+                    //capture i during the loop, since publishnext is running from the facotry, it may begin
+                    //after i has been incremeneted.
+                    int q = i;
+
+                    t = Task.Factory.StartNew(() => {
+                        RouteNext(q);
+                    }, CTS.Token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+                    taskThreadsRunning.AddOrUpdate(i, true, (k, v) => { return true; });
+
+                    taskThreads[i - 1] = t;
                 }
-
-                configure.Publishers.ToList().ForEach(k => {
-                    publishersRunning.AddOrUpdate(k.Key, new pubStat() { Has = true, Processing = false }, (c, z) => { return new pubStat() { Has = true, Processing = false }; });
-                });
-
-                //unlocks all messages that may have failed
-                configure.source_LocalStorage.UnMarkAll();
-
-                //restartTimer.AutoReset = false;
-                //restartTimer.Interval = 5000;
-                //restartTimer.Elapsed += RestartSource;
-
-                StartProcessingSource();
 
 
 
             }
-            if (configure.IsAPublisher) {
-                //if fewer publishers than max, only create threads for each pub.  otherwise, max 
-                maxPublisherThreads = configure.maxPublisherThreads;// configure.Publishers.Count > configure.maxSourceThreads ? configure.maxSourceThreads : configure.Publishers.Count;
-                pubThreads = new List<Task>();
-                pubThreadsRunning = new ConcurrentDictionary<int, bool>();
-                subscribersRunning = new ConcurrentDictionary<string, pubStat>();
 
-
-                
-
-
-                for (int i = 1; i <= maxPublisherThreads; i++) {
-                    pubThreads.Add(null);
-                    pubThreadsRunning.AddOrUpdate(i, true, (c, z) => { return true; });
-                }
-
-                //add subscriptions for subscribe/unsubscribe
-                ((IPublisherConfigure)configure).RegisterSubscriber("subsub", new SubscriptionSubscriber());
-                ((IPublisherConfigure)configure).RegisterMessage<SubscriptionRequest>("subsub", false);
-
-                ((IPublisherConfigure)configure).RegisterSubscriber("regsub", new EndpointRegistrationSubscriber());
-                ((IPublisherConfigure)configure).RegisterMessage<EndpointRegistrationRequest>("regsub", false);
-
-                configure.Subscribers.ToList().ForEach(k => {
-                    subscribersRunning.AddOrUpdate(k.Key, new pubStat() { Has = true, Processing = false }, (c, z) => { return new pubStat() { Has = true, Processing = false }; });
-                });
-
-                //unlocks all messages that may have failed
-                configure.publisher_LocalStorage.UnMarkAll();
-
-                publisherRestartTimer.AutoReset = false;
-                publisherRestartTimer.Interval = 1000;
-                publisherRestartTimer.Enabled = true;
-                publisherRestartTimer.Elapsed += RestartPublisher;
-
-                //StartProcessingPublisher();
-            }
-
-            if (configure.IsASubscriber) {
-                //if fewer publishers than max, only create threads for each pub.  otherwise, max 
-                maxSubThreads = configure.MaxSubscriberThreads;// configure.Publishers.Count > configure.maxSourceThreads ? configure.maxSourceThreads : configure.Publishers.Count;
-                subThreads = new List<Task>();
-                subThreadsRunning = new ConcurrentDictionary<int, bool>();
-                handlersRunning = new ConcurrentDictionary<string, pubStat>();
-
-                for (int i = 1; i <= maxSubThreads; i++) {
-                    subThreads.Add(null);
-                    subThreadsRunning.AddOrUpdate(i, true, (c, z) => { return true; });
-                }
-
-                //submit subscription requests
-                configure.Subscriptions.ForEach((s) => {
-
-                    if (configure.Publishers.ContainsKey(s.EndPointName)) {
-                        IEndPoint publisher = configure.Publishers[s.EndPointName];
-                        if (!publisher.ServiceIsDown()) {
-                            //??? how to do unsubscribe
-                            SubscriptionRequest request = new SubscriptionRequest() {
-                                EndPoint = configure.myEndPoint.EndPointAddress
-                                , DiscardIfSubscriberIsDown = s.DiscardIfDown
-                                , GUID = Util.Util.GetApplicationGuid()
-                                , MessageTypeName = s.TypeName
-                                , Name = ApplicationName
-                                , DeRegister = false
-                            };
-                            string payLoad = JsonConvert.SerializeObject(request);
-                            PersistedMessage msg = new PersistedMessage() {
-                                 HandleRetryCount = 0
-                                , Headers = new Dictionary<string, string>()
-                                , MessageType = Util.Util.GetTypeName(typeof(SubscriptionRequest))
-                                , Ordinal = 0
-                                , PayLoad = payLoad
-                                , Publisher = s.EndPointName
-                                , SendRetryCount = 0
-                                , Status =  PersistedMessageStatusOptions.ReadyToProcess
-                            };
-                            publisher.Publish(msg);
-                        }
-                    }
-
-
-                });
-
-    
-                configure.Handlers.ToList().ForEach(k => {
-                    handlersRunning.AddOrUpdate(k.Key, new pubStat() { Has = true, Processing = false }, (c, z) => { return new pubStat() { Has = true, Processing = false }; });
-                });
-
-                configure.subscriber_LocalStorage.UnMarkAll();
-
-                subscriberRestartTimer = new System.Timers.Timer();
-                subscriberRestartTimer.AutoReset = false;
-                subscriberRestartTimer.Interval = 5000;
-                subscriberRestartTimer.Enabled = true;
-                subscriberRestartTimer.Elapsed += RestartSubscriber;
-
-                //StartProcessingSubscriber();
-            }
-
-
+            //trigger threads to start waiting
+            resetEvent.Set();
+            RaiseOnProcessing();
 
         }
 
-        private static void RestartSource(object sender, System.Timers.ElapsedEventArgs e) {
 
-            StartProcessingSource();
+        private static void StopProcessing(int threadId) {
 
+            //if (!sourceCTS.IsCancellationRequested) { sourceCTS.Cancel(); }
+            taskThreadsRunning.AddOrUpdate(threadId, false, (k, v) => {
+                return false;
+            });
+
+            Stall(threadId);
         }
-        private static void RestartPublisher(object sender, System.Timers.ElapsedEventArgs e) {
-            StartProcessingPublisher();
-        }
-        private static void RestartSubscriber(object sender, System.Timers.ElapsedEventArgs e) {
-            StartProcessingSubscriber();
-        }
 
-        #region Source
 
-        private static AutoResetEvent sourceRE = new AutoResetEvent(false);
-        private static List<Task> sourceThreads = null;       
-        private static ConcurrentDictionary<int,bool> sourceThreadsRunning = null;
-        private static ConcurrentDictionary<string, pubStat> publishersRunning = null;
-        private static int currentPublisher = 0;
-        private static int maxSourceThreads = 1;
 
         public static string SendMessage<T>(T message) {
 
@@ -720,16 +660,12 @@ namespace ShortBus {
                 throw new BusNotRunningException("Bus has been stopped and cannot accept any new messages");
             }
 
-            if (!configure.IsASource) {
-                throw new BusNotConfiguredException("Source", "Bus not configured as a source");
-            }
-
             //serialize message
             string serialized = JsonConvert.SerializeObject(message, new JsonSerializerSettings() { TypeNameHandling = TypeNameHandling.All });
 
 
             //create peristed message
-            PersistedMessage msg = new PersistedMessage(serialized);
+            PersistedMessage msg = new PersistedMessage(serialized) { DateStamp = DateTime.UtcNow };
 
             JObject asJO = JObject.Parse(serialized);
             msg.MessageType = asJO["$type"].ToString();
@@ -740,29 +676,32 @@ namespace ShortBus {
 
                 int id = SyncGetPadding();
 
-                var publishers = configure.Messages.Where(g => g.TypeName.Equals(msg.MessageType, StringComparison.OrdinalIgnoreCase));
+                var routes = configure.Routes.Where(g => g.TypeName.Equals(msg.MessageType, StringComparison.OrdinalIgnoreCase));
                 List<PersistedMessage> messages = new List<PersistedMessage>();
 
-                foreach (MessageTypeMapping m in publishers) {
+                foreach (MessageTypeMapping m in routes) {
+
+                    IEndPoint endPoint = configure.EndPoints.FirstOrDefault(g => g.Key == m.EndPointName).Value;
+
                     PersistedMessage copied = new PersistedMessage() {
-                        HandleRetryCount = msg.HandleRetryCount
-                        , PayLoad = msg.PayLoad
+                        PayLoad = msg.PayLoad
                         , Headers = msg.Headers
                         , MessageType = msg.MessageType
-                        , Published = null
-                        , Publisher = m.EndPointName
-                        , SendRetryCount = msg.SendRetryCount
-                        , Sent = DateTime.UtcNow
                         , Status = PersistedMessageStatusOptions.ReadyToProcess
-                        , Subscriber = null
                         , Ordinal = id
+                        , DateStamp = DateTime.UtcNow
                         , TransactionID = msg.TransactionID
                         , Queue = m.EndPointName
                     };
+                    copied.Routes.Add(new Route() {
+                        EndPointName = m.EndPointName
+                        , EndPointType = endPoint.EndPointType
+                        , Routed = DateTime.UtcNow
+                    });
                     messages.Add(copied);
                 }
 
-                if (configure.source_LocalStorage.ServiceIsDown()) {
+                if (configure.Persitor.ServiceIsDown()) {
                     throw new ServiceEndpointDownException("Message Peristor is Down");
                 }
 
@@ -770,7 +709,7 @@ namespace ShortBus {
                     IEnumerable<MessageTypeMapping> pubs = ((IEnumerable<MessageTypeMapping>)p);
 
                     foreach (MessageTypeMapping m in pubs) {
-                        publishersRunning.AddOrUpdate(m.EndPointName, new pubStat() { Has = true, Processing = false }, (k, v) => {
+                        endPointsRunning.AddOrUpdate(m.EndPointName, new pubStat() { Has = true, Processing = false }, (k, v) => {
 
                             if (!v.Processing) {
                                 return new pubStat() { Has = true, Processing = false };
@@ -780,26 +719,14 @@ namespace ShortBus {
                         });
                     }
 
-                    StartProcessingSource();
+                    StartProcessing();
 
-                }, publishers);
+                }, routes);
 
                 TxRM rm = new TxRM();
-                
-                string transactionId = rm.SendMessage(messages, configure.source_LocalStorage, whenDone);
 
+                string transactionId = rm.SendMessage(messages, configure.Persitor, whenDone);
 
-
-                //foreach (MessageTypeMapping m in publishers) {
-                //    publishersRunning.AddOrUpdate(m.EndPointName, new pubStat() { Has = true, Processing = false }, (k, v) => {
-
-                //        if (!v.Processing) {
-                //            return new pubStat() { Has = true, Processing = false };
-                //        } else {
-                //            return v;
-                //        }
-                //    });
-                //}
 
                 return transactionId;
 
@@ -808,331 +735,54 @@ namespace ShortBus {
                 throw;
             }
 
-            
 
 
-        }
 
-        public static void SendMessage<T>(T Message, Dictionary<string, string> Headers) {
-            throw new NotImplementedException();
-        }
-
-        private static void StopProcessingSource(int threadId) {
-
-            //if (!sourceCTS.IsCancellationRequested) { sourceCTS.Cancel(); }
-            sourceThreadsRunning.AddOrUpdate(threadId, false, (k, v) => {
-                return false;
-            });
-
-            Stall(threadId);
-        }
-
-        private static void StartProcessingSource() {
-
-
-            for (int i = 1; i <= maxSourceThreads; i++) {
-
-                Task t = sourceThreads[i - 1];
-                if (t == null || t.IsCompleted) {
-                    //t = new Thread(PublishNext);
-
-                    //capture i during the loop, since publishnext is running from the facotry, it may begin
-                    //after i has been incremeneted.
-                    int q = i;
-
-                    t = Task.Factory.StartNew(() => {
-                        PublishNext(q);
-                    }, CTS.Token,  TaskCreationOptions.LongRunning, TaskScheduler.Default );
-
-                    sourceThreadsRunning.AddOrUpdate(i, true, (k, v) => { return true; });
-                    
-                   sourceThreads[i - 1] = t;
-                }
-
-
-                
-            }
-
-            //trigger threads to start waiting
-            sourceRE.Set();
-            RaiseOnProcessing();
-
-        }
-    
-        private static void PublishNext(int threadId) {
-
-
-            RaiseOnThreadStarted();
-
-            //Console.WriteLine("Thread {0} Waiting", myThreadId);
-            bool process = true;
-    
-            while (process && !CTS.IsCancellationRequested) {
-                if (sourceRE.WaitOne()) {
-
-                    //shut down loop unless we have a publisher to query
-                    process = false;
-                    if (!CTS.IsCancellationRequested) {
-
-
-                        //Console.WriteLine("Thread {0} going", myThreadId);
-                        int newThreadId = threadId + 1;
-                        if (newThreadId == (maxSourceThreads + 1)) { newThreadId = 1; }
-
-                        //if current thread is mine, proceed and set to next thread
-                        //if (threadId == Interlocked.CompareExchange(ref maxSourceThreads, threadId, newThreadId)) {
-
-                        //determine what publisher to use.
-
-                        string q = SyncGetNextPublisherWithMessages();
-                        if (!string.IsNullOrEmpty(q)) {
-
-
-                            process = true;
-                            //get next message to publish
-                            PersistedMessage msg = SyncGetMessageToProcess(q, configure.source_LocalStorage);
-
-                            //if we found a message, reset so next thread can look
-                            //otherwise, don't reset... this will effectively stop all threads until soemthing else
-                            //notifies that there is something to process.
-                            if (msg != null) {
-
-                                //we have our value, so pass on to next thread
-                                sourceRE.Set();
-
-
-
-                                //publish message
-                                bool published = PublishMessage(msg);
-
-                                if (!configure.source_LocalStorage.ServiceIsDown()) {
-                                    try {
-                                        if (published) {
-                                            //if localstorage experiences an error, it will shut itself down
-                                            var popped = configure.source_LocalStorage.Pop(msg.Id);
-                                        }
-
-                                        publishersRunning.AddOrUpdate(q, new pubStat() { Has = true, Processing = false }, (k, v) => {
-                                            return new pubStat() { Has = true, Processing = false };
-                                        });
-
-                                    } catch (Exception) {
-                                        //don't need to do anything but stop the process
-                                        //the message will be left in a transitory state, but will be retained.
-                                        process = false;
-                                    }
-                                }
-
-                            } else {
-                                //if we didn't find a message, stop processing that q until another comes in
-
-                                publishersRunning.AddOrUpdate(q, new pubStat() { Has = false, Processing = false }, (k, v) => {
-                                    return new pubStat() { Has = false, Processing = false };
-                                });
-
-                                sourceRE.Set();
-                            }
-
-                        } else {
-                            //if we don't have a q to process, allow the next thread to do its 
-                            //work so it can shut itself down, too
-                            process = false;
-                            sourceRE.Set();
-                        }
-
-
-                        //} else {
-
-                        //    process = true;
-                        //    //err, not my turn, pass on to next.
-                        //    sourceRE.Set();
-
-                        //}
-                    }
-                }
-
-   
-
-            } // end while cancellation token
-            StopProcessingSource(threadId);
-
-        }
-
-        private static bool PublishMessage(PersistedMessage msg) {
-
-            bool toReturn = false;
-            try { 
-            var publishers = from c in configure.Messages where c.TypeName.Equals(msg.MessageType, StringComparison.OrdinalIgnoreCase) && c.EndPointName == msg.Publisher select c;
-
-                foreach (var entry in publishers) {
-
-                    IEndPoint pub = configure.Publishers.FirstOrDefault(g => g.Key.Equals(entry.EndPointName, StringComparison.OrdinalIgnoreCase)).Value;
-                    if (pub != null && !pub.ServiceIsDown()) {
-
-                        try {
-
-                            toReturn = pub.Publish(msg).Status;
-                        } catch {
-                            toReturn = entry.DiscardIfDown;
-                        }
-                    } else if (pub.ServiceIsDown()) {
-                        //if subscription allows discard, just return true and let process discard message
-                        toReturn = entry.DiscardIfDown;
-                            
-                    }
-                }
-            } catch (Exception) {
-                toReturn = false;
-            }
-            return toReturn;
-
-        }
-
-        private static string SyncGetNextPublisherWithMessages() {
-
-            string toReturn = null;
-            lock (sourceLock) {
-
-                int current = currentPublisher;
-                
-                int next = current + 1;
-                //a thread is already using current, so loop through remaining and grab next
-                for (int i = 0; i < (publishersRunning.Count); i++) {
-
-                    if (next >= publishersRunning.Count) { next = 0; }
-                    string q = publishersRunning.ToList()[next].Key;
-                    pubStat stat = publishersRunning[q];
-                    if (stat.Has && !stat.Processing) {
-                        toReturn = q;
-                        publishersRunning.AddOrUpdate(q, new pubStat() { Has = true, Processing = true }, (k, v) => {
-                            return new pubStat() { Has = true, Processing = true };
-                        });
-                        currentPublisher = next;
-                        break;
-                    }
-                    next++;
-                }
-                if (string.IsNullOrEmpty(toReturn)) {
-                    currentPublisher = next - 1;
-                    if (currentPublisher < 0) {
-                        currentPublisher = publishersRunning.Count - 1;
-                    }
-                }
-                
-
-            }
-            return toReturn;
-        }
-
-
-        #endregion
-
-        #region Publisher
-
-        private static AutoResetEvent pubRE = new AutoResetEvent(false);
-        private static List<Task> pubThreads = null;
-        private static ConcurrentDictionary<int, bool> pubThreadsRunning = null;
-        private static ConcurrentDictionary<string, pubStat> subscribersRunning = null;
-        private static int currentSubscriber = 0;
-        private static int maxPublisherThreads = 1;
-
-        public static void BroadcastMessage(PersistedMessage message) {
-
-            if (stopped || stopping) {
-                throw new BusNotRunningException("Bus has been stopped and cannot accept any new messages");
-            }
-
-            if (!configure.IsAPublisher) {
-                throw new BusNotConfiguredException("Publisher", "Bus not configured as a Publisher");
-            }
-
-
-            //persist message to local storage
-            try {
-
-                int id = SyncGetPadding();
-
-                var subscribers = configure.Subscriptions.Where(g => g.TypeName.Equals(message.MessageType, StringComparison.OrdinalIgnoreCase));
-                List<PersistedMessage> messages = new List<PersistedMessage>();
-
-                foreach (MessageTypeMapping m in subscribers) {
-                    PersistedMessage copied = (PersistedMessage)message.Clone();
-                    copied.Subscriber = m.EndPointName;
-                    copied.Queue = m.EndPointName;
-                    copied.Published = DateTime.UtcNow;
-                    copied.Ordinal = id;
-                    copied.Status = PersistedMessageStatusOptions.ReadyToProcess;
-                    messages.Add(copied);
-          
-                }
-
-                if (configure.publisher_LocalStorage.ServiceIsDown()) {
-                    throw new ServiceEndpointDownException("Message Peristor is Down");
-                }
-
-                //only persist if somebody is listening to it
-                if (messages.Count() > 0) {
-                    configure.publisher_LocalStorage.Persist(messages);
-                    foreach (MessageTypeMapping m in subscribers) {
-                        subscribersRunning.AddOrUpdate(m.EndPointName, new pubStat() { Has = true, Processing = false }, (k, v) => {
-
-                            if (!v.Processing) {
-                                return new pubStat() { Has = true, Processing = false };
-                            } else {
-                                return v;
-                            }
-                        });
-                    }
-                }
-
-
-            } catch (Exception) {
-                throw;
-            }
-
-            StartProcessingPublisher();
         }
 
         public static void ReceiveMessage(PersistedMessage message) {
 
-
-
             if (stopped || stopping) {
                 throw new BusNotRunningException("Bus has been stopped and cannot accept any new messages");
             }
 
-            if (!configure.IsASubscriber) {
-                throw new BusNotConfiguredException("Subscriber", "Bus not configured as a subscriber");
-            }
-
-
-
-
-            //persist message to local storage
             try {
-
                 int id = SyncGetPadding();
 
-                var handlers = configure.Handlers.Where(g => g.Key.Equals(message.MessageType, StringComparison.OrdinalIgnoreCase));
+                var routes = configure.Routes.Where(g => g.TypeName.Equals(message.MessageType, StringComparison.OrdinalIgnoreCase));
                 List<PersistedMessage> messages = new List<PersistedMessage>();
 
-                foreach (KeyValuePair<string, IMessageHandler> m in handlers) {
+                List<string> endPointsToTrigger = new List<string>();
+
+                //persist a copy of the message for each endpoint
+                foreach (MessageTypeMapping m in routes) {
+
+                    IEndPoint endPoint = configure.EndPoints.FirstOrDefault(g => g.Key == m.EndPointName).Value;
+                    if (endPointsToTrigger.Count(g => g.Equals(m.EndPointName, StringComparison.OrdinalIgnoreCase)) == 0) {
+                        endPointsToTrigger.Add(m.EndPointName);
+                    }
                     PersistedMessage copied = (PersistedMessage)message.Clone();
-                    copied.MessageHandler = m.Key;
-                    copied.Queue = m.Key;
-                    copied.Received = DateTime.UtcNow;
+
+                    copied.Queue = m.EndPointName;
                     copied.Ordinal = id;
                     copied.Status = PersistedMessageStatusOptions.ReadyToProcess;
+                    copied.Routes.Add(new Route() {
+                        EndPointType = endPoint.EndPointType
+                        , EndPointName = m.EndPointName
+                        , Routed = DateTime.UtcNow
+                    });
                     messages.Add(copied);
                 }
 
-                if (configure.subscriber_LocalStorage.ServiceIsDown()) {
+                if (configure.Persitor.ServiceIsDown()) {
                     throw new ServiceEndpointDownException("Message Peristor is Down");
                 }
 
-                configure.subscriber_LocalStorage.Persist(messages);
-                foreach (KeyValuePair<string, IMessageHandler> m in handlers) {
-                    handlersRunning.AddOrUpdate(m.Key, new pubStat() { Has = true, Processing = false }, (k, v) => {
+                configure.Persitor.Persist(messages);
+
+
+                foreach (string n in endPointsToTrigger) {
+                    endPointsRunning.AddOrUpdate(n, new pubStat() { Has = true, Processing = false }, (k, v) => {
 
                         if (!v.Processing) {
                             return new pubStat() { Has = true, Processing = false };
@@ -1143,298 +793,62 @@ namespace ShortBus {
                 }
 
 
-            } catch (Exception) {
+            } catch {
                 throw;
             }
 
-            StartProcessingSubscriber();
-
+            StartProcessing();
 
         }
 
-        private static void StartProcessingPublisher() {
-            for (int i = 1; i <= maxPublisherThreads; i++) {
 
-                Task t = pubThreads[i - 1];
-                if (t == null || t.IsCompleted) {
-                    //t = new Thread(PublishNext);
+        private static EndPointResponse RouteMessage(PersistedMessage msg) {
 
-                    //capture i during the loop, since publishnext is running from the facotry, it may begin
-                    //after i has been incremeneted.
-                    int q = i;
+            EndPointResponse toReturn = new EndPointResponse() { Status = false };
+            try {
 
-                    t = Task.Factory.StartNew(() => {
-                        DistributeNext(q);
-                    }, CTS.Token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+                MessageTypeMapping route = configure.Routes.FirstOrDefault(g => g.EndPointName.Equals(msg.Queue, StringComparison.OrdinalIgnoreCase) && g.TypeName.Equals(msg.MessageType, StringComparison.OrdinalIgnoreCase));
+                IEndPoint endPoint = configure.EndPoints.FirstOrDefault(g => g.Key.Equals(msg.Queue, StringComparison.OrdinalIgnoreCase)).Value;
+                if (endPoint.GetType().IsAssignableFrom(typeof(IMessageHandler))) {
 
-                    pubThreadsRunning.AddOrUpdate(i, true, (k, v) => { return true; });
+                    IMessageHandler handler = (IMessageHandler)endPoint;
+                    toReturn.EndPointType = EndPointTypeOptions.Handler;
+                    try {
+                        HandlerResponse response = handler.Handle(msg);
+                        toReturn.Status = response.Status == HandlerStatusOptions.Handled;
+                        toReturn.HandlerResponse = response;
+                    } catch {
+                        toReturn.HandlerResponse = HandlerResponse.Exception();
+                    }
 
-                    pubThreads[i - 1] = t;
+                } else {
+                    IMessageRouter router = (IMessageRouter)endPoint;
+                    toReturn.EndPointType = router.EndPointType;
+                    if (!router.ServiceIsDown()) {
+
+                        RouteResponse response = router.Publish(msg);
+                        toReturn = new EndPointResponse() { EndPointType = router.EndPointType, Status = response.Status, RouteResponse = response };
+                    } else {
+                        
+                        toReturn.Status = route.DiscardIfDown;
+                    }
                 }
 
-
-
+            } catch (Exception) {
+                
             }
 
-            //trigger threads to start waiting
-            pubRE.Set();
-            RaiseOnProcessing();
+            return toReturn;
         }
 
-        private static void DistributeNext(int threadId) {
-
+        private static void RouteNext(int threadId) {
             RaiseOnThreadStarted();
 
             //Console.WriteLine("Thread {0} Waiting", myThreadId);
             bool process = true;
 
             while (process && !CTS.IsCancellationRequested) {
-                if (pubRE.WaitOne()) {
-
-                    //shut down loop unless we have a publisher to query
-                    process = false;
-                    if (!CTS.IsCancellationRequested) {
-
-
-                        //Console.WriteLine("Thread {0} going", myThreadId);
-                        //int newThreadId = threadId + 1;
-                        //if (newThreadId == (maxSourceThreads + 1)) { newThreadId = 1; }
-
-                        //if current thread is mine, proceed and set to next thread
-                        //if (threadId == Interlocked.CompareExchange(ref maxSourceThreads, threadId, newThreadId)) {
-
-                        //determine what publisher to use.
-
-                        string q = SyncGetNextSubscriberWithMessages();
-                        if (!string.IsNullOrEmpty(q)) {
-
-
-                            process = true;
-                            //get next message to publish
-                            PersistedMessage msg = SyncGetMessageToProcess(q, configure.publisher_LocalStorage);
-
-                            //if we found a message, reset so next thread can look
-                            //otherwise, don't reset... this will effectively stop all threads until soemthing else
-                            //notifies that there is something to process.
-                            if (msg != null) {
-
-                                //we have our value, so pass on to next thread
-                                pubRE.Set();
-
-
-
-                                //publish message
-                                bool distributed = DistributeMessage(msg);
-
-                                if (!configure.publisher_LocalStorage.ServiceIsDown()) {
-                                    try {
-
-                                        if (distributed) { 
-                                        //if localstorage experiences an error, it will shut itself down
-                                            var popped = configure.publisher_LocalStorage.Pop(msg.Id);
-                                        }
-
-                                        subscribersRunning.AddOrUpdate(q, new pubStat() { Has = true, Processing = false }, (k, v) => {
-                                            return new pubStat() { Has = true, Processing = false };
-                                        });
-
-                                    } catch (Exception) {
-                                        //don't need to do anything but stop the process
-                                        //the message will be left in a transitory state, but will be retained.
-                                        process = false;
-                                    }
-                                }
-
-                            } else {
-                                //if we didn't find a message, stop processing that q until another comes in
-
-                                subscribersRunning.AddOrUpdate(q, new pubStat() { Has = false, Processing = false }, (k, v) => {
-                                    return new pubStat() { Has = false, Processing = false };
-                                });
-
-                                pubRE.Set();
-                            }
-
-                        } else {
-                            //if we don't have a q to process, allow the next thread to do its 
-                            //work so it can shut itself down, too
-                            process = false;
-                            pubRE.Set();
-                        }
-
-
-                        //} else {
-
-                        //    process = true;
-                        //    //err, not my turn, pass on to next.
-                        //    sourceRE.Set();
-
-                        //}
-                    }
-                }
-
-
-
-            } // end while cancellation token
-            StopProcessingPublisher(threadId);
-        }
-
-        private static void StopProcessingPublisher(int threadId) {
-            pubThreadsRunning.AddOrUpdate(threadId, false, (k, v) => { return false; });
-
-
-
-            Stall(threadId);
-        }
-
-        private static bool DistributeMessage(PersistedMessage msg) {
-
-            //if there are not any subscribers, just let the process remove the message
-            bool toReturn = false;
-
-            var subscriptions = from c in configure.Subscriptions where c.TypeName.Equals(msg.MessageType, StringComparison.OrdinalIgnoreCase) select c;
-
-            //subscripions may be modified here, so execute linq immediately 
-            var toProcess = new List<MessageTypeMapping>(subscriptions);
-
-            foreach (var entry in toProcess) {
-
-                IEndPoint subscriber = configure.Subscribers.FirstOrDefault(g => g.Key.Equals(entry.EndPointName, StringComparison.OrdinalIgnoreCase)).Value;
-                toReturn = subscriber == null;
-
-                if (subscriber != null && !subscriber.ServiceIsDown()) {
-                    EndpointResponse response = subscriber.Publish(msg);
-                    toReturn = response.Status;
-                } 
-            }
-
-            return toReturn;
-        }
-
-        private static string SyncGetNextSubscriberWithMessages() {
-            string toReturn = null;
-            lock (sourceLock) {
-
-                int current = currentSubscriber;
-                bool processSubscriber = true;
-
-                //if the subscription subscriber has messages, we need to process those immediately
-                //this ensures that the subscriber gets all messsages from the time it subscribes
-                pubStat s = subscribersRunning["subsub"];
-                if (s.Has && !s.Processing) { // if message on queue, but not processing... process it immediately
-                    toReturn = "subsub";
-                    subscribersRunning.AddOrUpdate("subsub", new pubStat() { Has = true, Processing = true }, (k, v) => {
-                        return new pubStat() { Has = true, Processing = true };
-                    });
-                    processSubscriber = false;
-                } else if (s.Has && s.Processing) { //if message on queue, but already processing, don't process anything else until queue is done
-
-                    //if we are processing subscription requests, stop all processing until done.
-
-                    toReturn = null;
-                    processSubscriber = false;
-                }
-
-        
-
-                if (processSubscriber) {
-                    int next = current + 1;
-                    //a thread is already using current, so loop through remaining and grab next
-                    for (int i = 0; i < (subscribersRunning.Count); i++) {
-
-                        if (next >= subscribersRunning.Count) { next = 0; }
-                        string q = subscribersRunning.ToList()[next].Key;
-                        pubStat stat = subscribersRunning[q];
-                        if (stat.Has && !stat.Processing) {
-                            toReturn = q;
-                            subscribersRunning.AddOrUpdate(q, new pubStat() { Has = true, Processing = true }, (k, v) => {
-                                return new pubStat() { Has = true, Processing = true };
-                            });
-                            currentSubscriber = next;
-                            break;
-                        }
-                        next++;
-                    }
-
-                    if (string.IsNullOrEmpty(toReturn)) {
-                        currentSubscriber = next - 1;
-                        if (currentSubscriber < 0) {
-                            currentSubscriber = subscribersRunning.Count - 1;
-                        }
-                    }
-
-                }
-
-            }
-            return toReturn;
-        }
-
-        #endregion
-
-        #region Subscriber
-
-        private static AutoResetEvent subRE = new AutoResetEvent(false);
-        private static List<Task> subThreads = null;
-        private static ConcurrentDictionary<int, bool> subThreadsRunning = null;
-        private static ConcurrentDictionary<string, pubStat> handlersRunning = null;
-        private static int currentHandler = 0;
-        private static int maxSubThreads = 1;
-
-
-
-
-        private static void StopProcessingSubscriber(int threadId) {
-
-            //if (!sourceCTS.IsCancellationRequested) { sourceCTS.Cancel(); }
-            subThreadsRunning.AddOrUpdate(threadId, false, (k, v) => {
-                return false;
-            });
-
-            Stall(threadId);
-        }
-
-        private static void StartProcessingSubscriber() {
-
-
-            for (int i = 1; i <= maxSubThreads; i++) {
-
-                Task t = subThreads[i - 1];
-                if (t == null || t.IsCompleted) {
-                    //t = new Thread(PublishNext);
-
-                    //capture i during the loop, since publishnext is running from the facotry, it may begin
-                    //after i has been incremeneted.
-                    int q = i;
-
-                    t = Task.Factory.StartNew(() => {
-                        HandleNext(q);
-                    }, CTS.Token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
-
-                    subThreadsRunning.AddOrUpdate(i, true, (k, v) => { return true; });
-
-                    subThreads[i - 1] = t;
-                }
-
-
-
-            }
-
-            //trigger threads to start waiting
-            subRE.Set();
-            RaiseOnProcessing();
-
-        }
-
-        private static void HandleNext(int threadId) {
-
-
-            RaiseOnThreadStarted();
-
-            //Console.WriteLine("Thread {0} Waiting", myThreadId);
-            bool process = true;
-
-            while (process && !CTS.IsCancellationRequested) {
-                if (subRE.WaitOne()) {
+                if (resetEvent.WaitOne()) {
 
                     //shut down loop unless we have a publisher to query
                     process = false;
@@ -1443,48 +857,44 @@ namespace ShortBus {
 
                         //Console.WriteLine("Thread {0} going", myThreadId);
                         int newThreadId = threadId + 1;
-                        if (newThreadId == (maxSubThreads + 1)) { newThreadId = 1; }
+                        if (newThreadId == (maxThreads + 1)) { newThreadId = 1; }
 
-                        //if current thread is mine, proceed and set to next thread
-                        //if (threadId == Interlocked.CompareExchange(ref maxSourceThreads, threadId, newThreadId)) {
 
-                        //determine what publisher to use.
 
-                        string q = SyncGetNextHandlerWithMessages();
+                        string q = SyncGetNextEndPointWithMessages();
                         if (!string.IsNullOrEmpty(q)) {
 
 
                             process = true;
                             //get next message to publish
-                            PersistedMessage msg = SyncGetMessageToProcess(q, configure.subscriber_LocalStorage);
+                            PersistedMessage msg = SyncGetMessageToProcess(q, configure.Persitor);
 
                             //if we found a message, reset so next thread can look
                             //otherwise, don't reset... this will effectively stop all threads until soemthing else
                             //notifies that there is something to process.
                             if (msg != null) {
 
-                                configure.subscriber_LocalStorage.Processing(msg.Id);
+                                configure.Persitor.Processing(msg.Id);
                                 //we have our value, so pass on to next thread
-                                subRE.Set();
+                                resetEvent.Set();
 
 
 
                                 //publish message
-                                HandlerResponse handled = HandleMessage(msg);
+                                EndPointResponse response = RouteMessage(msg);
 
-                                if (!configure.subscriber_LocalStorage.ServiceIsDown()) {
+                                if (!configure.Persitor.ServiceIsDown()) {
                                     try {
-                                        if (handled.Status == HandlerStatusOptions.Handled) {
+                                        if (response.Status) {
                                             //if localstorage experiences an error, it will shut itself down
-                                            var popped = configure.subscriber_LocalStorage.Pop(msg.Id);
-                                        } else if (handled.Status == HandlerStatusOptions.Reschedule ) {
-
-                                            //need to update message as rescheduled with new date
-                                            var popped = configure.subscriber_LocalStorage.Reschedule(msg.Id, handled.RescheduleIncrement);
-
+                                            var popped = configure.Persitor.Pop(msg.Id);
+                                        } else if (response.EndPointType == EndPointTypeOptions.Handler) {
+                                            if (response.HandlerResponse.Status == HandlerStatusOptions.Reschedule) {
+                                                var popped = configure.Persitor.Reschedule(msg.Id, response.HandlerResponse.RescheduleIncrement);
+                                            }
                                         }
 
-                                        handlersRunning.AddOrUpdate(q, new pubStat() { Has = true, Processing = false }, (k, v) => {
+                                        endPointsRunning.AddOrUpdate(q, new pubStat() { Has = true, Processing = false }, (k, v) => {
                                             return new pubStat() { Has = true, Processing = false };
                                         });
 
@@ -1498,18 +908,18 @@ namespace ShortBus {
                             } else {
                                 //if we didn't find a message, stop processing that q until another comes in
 
-                                handlersRunning.AddOrUpdate(q, new pubStat() { Has = false, Processing = false }, (k, v) => {
+                                endPointsRunning.AddOrUpdate(q, new pubStat() { Has = false, Processing = false }, (k, v) => {
                                     return new pubStat() { Has = false, Processing = false };
                                 });
 
-                                subRE.Set();
+                                resetEvent.Set();
                             }
 
                         } else {
                             //if we don't have a q to process, allow the next thread to do its 
                             //work so it can shut itself down, too
                             process = false;
-                            subRE.Set();
+                            resetEvent.Set();
                         }
 
 
@@ -1526,66 +936,74 @@ namespace ShortBus {
 
 
             } // end while cancellation token
-            StopProcessingSubscriber(threadId);
-
+            StopProcessing(threadId);
         }
 
-        private static HandlerResponse HandleMessage(PersistedMessage msg) {
-
-            HandlerResponse toReturn = null;
-            try {
-                var handlers = from c in configure.Handlers where c.Key.Equals(msg.MessageType, StringComparison.OrdinalIgnoreCase) select c;
-
-                foreach (var entry in handlers) {
-
-                    toReturn = entry.Value.Handle(msg);
-                }
-                
-
-
-            } catch (Exception) {
-                toReturn = HandlerResponse.Exception();
-            }
-
-            if (toReturn == null) { toReturn = HandlerResponse.Exception(); }
-
-            return toReturn;
-
-        }
-
-        private static string SyncGetNextHandlerWithMessages() {
-
+        private static string SyncGetNextEndPointWithMessages() {
             string toReturn = null;
-            lock (sourceLock) {
+            lock (lockObj) {
 
-                int current = currentHandler;
+                
+                int current = currentEndpoint;
+                
+                bool processEndPoint = true;
 
-                int next = current + 1;
-                //a thread is already using current, so loop through remaining and grab next
-                for (int i = 0; i < (handlersRunning.Count); i++) {
+                //if the subscription subscriber has messages, we need to process those immediately
+                //this ensures that the subscriber gets all messsages from the time it subscribes
+                pubStat s = endPointsRunning["subsub"];
+                if (s.Has && !s.Processing) { // if message on queue, but not processing... process it immediately
+                    toReturn = "subsub";
+                    endPointsRunning.AddOrUpdate("subsub", new pubStat() { Has = true, Processing = true }, (k, v) => {
+                        return new pubStat() { Has = true, Processing = true };
+                    });
+                    processEndPoint = false;
+                } else if (s.Has && s.Processing) { //if message on queue, but already processing, don't process anything else until queue is done
 
-                    if (next >= handlersRunning.Count) { next = 0; }
-                    string q = handlersRunning.ToList()[next].Key;
-                    pubStat stat = handlersRunning[q];
+                    //if we are processing subscription requests, stop all processing until done.
 
-                    IMessageHandler handler = configure.Handlers[q];
-
-                    if (stat.Has && (!stat.Processing || handler.Parallel)) {
-                        toReturn = q;
-                        handlersRunning.AddOrUpdate(q, new pubStat() { Has = true, Processing = !handler.Parallel }, (k, v) => {
-                            return new pubStat() { Has = true, Processing = !handler.Parallel };
-                        });
-                        currentHandler = next;
-                        break;
-                    }
-                    next++;
+                    toReturn = null;
+                    processEndPoint = false;
                 }
-                if (string.IsNullOrEmpty(toReturn)) {
-                    currentHandler = next - 1;
-                    if (currentHandler < 0) {
-                        currentHandler = handlersRunning.Count - 1;
+
+
+
+                if (processEndPoint) {
+                    int next = current + 1;
+                    //a thread is already using current, so loop through remaining and grab next
+                    for (int i = 0; i < (endPointsRunning.Count); i++) {
+
+                        if (next >= endPointsRunning.Count) { next = 0; }
+                        string q = endPointsRunning.ToList()[next].Key;
+                        pubStat stat = endPointsRunning[q];
+
+                        IEndPoint endPoint = configure.EndPoints[q];
+                        bool forceHandle = false;
+                        if (endPoint.EndPointType == EndPointTypeOptions.Handler) {
+                            IMessageHandler handler = (IMessageHandler)endPoint;
+                            forceHandle = handler.Parallel;
+                        }
+
+                        if (stat.Has && (!stat.Processing || forceHandle)) {
+                            toReturn = q;
+                            endPointsRunning.AddOrUpdate(q, new pubStat() { Has = true, Processing = true }, (k, v) => {
+                                return new pubStat() { Has = true, Processing = true };
+                            });
+                            currentEndpoint = next;
+                            break;
+                        }
+                        next++;
                     }
+
+                    //#TODO : WTF am i doing this?
+                    if (string.IsNullOrEmpty(toReturn)) {
+                        currentEndpoint = next - 1;
+                        if (currentEndpoint < 0) {
+                            currentEndpoint = endPointsRunning.Count - 1;
+                        }
+                    }
+
                 }
+
 
 
             }
@@ -1593,15 +1011,12 @@ namespace ShortBus {
         }
 
 
-        #endregion
+        //shared stuff
 
-
-
-        #region Shared
         private static PersistedMessage SyncGetMessageToProcess(string q, IPersist storage) {
 
             PersistedMessage toReturn = null;
-            lock (sourceLock) {
+            lock (lockObj) {
 
                 if (!storage.ServiceIsDown()) {
                     //get the next one from the database
@@ -1625,7 +1040,7 @@ namespace ShortBus {
             return toReturn;
         }
 
-        #endregion
+        
 
     }
 }

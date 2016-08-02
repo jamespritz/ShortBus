@@ -8,27 +8,44 @@ using ShortBus.Persistence;
 using System.Net;
 using Newtonsoft.Json;
 using System.IO;
+using ShortBus.Routing;
 
 namespace ShortBus.Default {
 
 
     public class RESTSettings {
+
+        public RESTSettings(string url, EndPointTypeOptions endPointType) {
+            this.URL = url;
+            this.EndPointType = endPointType;
+        }
+
         public string URL { get;set; }
+        public EndPointTypeOptions EndPointType { get; set; }
     }
 
-    public class RESTEndPoint : IEndPoint {
+    public class RESTEndPoint : IMessageRouter {
 
         private bool ImDown = false;
         private RESTSettings settings = null;
+
+        EndPointTypeOptions IEndPoint.EndPointType {
+            get {
+                return settings.EndPointType;
+            }
+        }
+
         public RESTEndPoint(RESTSettings settings) {
             this.settings = settings;
         }
 
-        EndpointResponse IEndPoint.HelloWorld(PersistedMessage message) {
+
+
+        RouteResponse IMessageRouter.HelloWorld(PersistedMessage message) {
             return this.Post(message, "HelloWorld");
         }
 
-        EndpointResponse IEndPoint.Publish(PersistedMessage message) {
+        RouteResponse IMessageRouter.Publish(PersistedMessage message) {
 
             return this.Post(message, "PostMessage");
 
@@ -36,25 +53,25 @@ namespace ShortBus.Default {
 
 
 
-        bool IEndPoint.ResetConnection() {
+        bool IMessageRouter.ResetConnection() {
             this.ImDown = false;
             return this.ImDown;
         }
-        bool IEndPoint.ResetConnection(string endPointAddress) {
+        bool IMessageRouter.ResetConnection(string endPointAddress) {
             this.settings.URL = endPointAddress;
-            return ((IEndPoint)this).ResetConnection();
+            return ((IMessageRouter)this).ResetConnection();
         }
 
-        bool IEndPoint.ServiceIsDown() {
+        bool IMessageRouter.ServiceIsDown() {
             return this.ImDown;
         }
 
 
 
         //postmessage
-        private EndpointResponse Post(PersistedMessage post, string command)  {
+        private RouteResponse Post(PersistedMessage post, string command)  {
 
-            EndpointResponse toReturn = new EndpointResponse() { PayLoad = null, Status = false };
+            RouteResponse toReturn = new RouteResponse() { PayLoad = null, Status = false };
             try {
                 string url = settings.URL + string.Format(@"/api/message/{0}", command);
 
@@ -106,7 +123,7 @@ namespace ShortBus.Default {
                     response.Close();
                 }
 
-                toReturn = JsonConvert.DeserializeObject<EndpointResponse>(responseText);
+                toReturn = JsonConvert.DeserializeObject<RouteResponse>(responseText);
                 
                 
             } catch (Exception e) {

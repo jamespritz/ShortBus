@@ -7,10 +7,18 @@ using System.Threading.Tasks;
 namespace ShortBus.Publish {
 
 
+    public class EndpointPingRequest {
+        public string EndPoint { get; set; }
+        public string GUID { get; set; }
+        public string Name { get; set; }
+        public EndPointTypeOptions EndPointType { get; set; }
+    }
+
     public class EndpointRegistrationRequest {
         public string EndPoint { get; set; }
         public string GUID { get; set; }
         public string Name { get; set; }
+        public EndPointTypeOptions EndPointType { get; set; }
         public bool DeRegister { get; set; }
     }
 
@@ -21,6 +29,8 @@ namespace ShortBus.Publish {
 
 
     }
+
+
 
 
 }
