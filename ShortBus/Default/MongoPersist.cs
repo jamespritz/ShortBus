@@ -135,7 +135,7 @@ namespace ShortBus.Default {
 
 
 
-            // #TODO: test if database exists and that it is not configured for another collection
+            // TODO: test if database exists and that it is not configured for another collection
 
             this.mongoProvider = new MongoProvider(server);
 

@@ -36,6 +36,8 @@ namespace ShortBus.Configuration {
         IConfigure RegisterEndpoint(string endPointName, IEndPoint endPoint);
         IConfigure RouteMessage<T>(string endPointName, bool discardIfEndpointDown);
 
+        IConfigure SubscribeToMessage<T>(string endPointName);
+
         IConfigure RegisterMessageHandler<T>(IMessageHandler handler);
 
     }
@@ -137,14 +139,27 @@ namespace ShortBus.Configuration {
             string typeName = ShortBus.Util.Util.GetTypeName(typeof(T)).ToLower();
 
             if (!this.Routes.Any(c => c.TypeName.Equals(typeName, StringComparison.OrdinalIgnoreCase) && c.EndPointName.Equals(endPointName, StringComparison.OrdinalIgnoreCase))) {
-                this.Routes.Add(new MessageTypeMapping() { TypeName = typeName, EndPointName = endPointName, DiscardIfDown = discardIfEndpointDown });
+                this.Routes.Add(new MessageTypeMapping(typeName, endPointName, MessageDirectionOptions.Outbound, discardIfEndpointDown));
             }
 
             return (IConfigure)this;
         }
+
+        IConfigure IConfigure.SubscribeToMessage<T>(string endPointName) {
+
+            string typeName = ShortBus.Util.Util.GetTypeName(typeof(T)).ToLower();
+
+            if (!this.Routes.Any(c => c.TypeName.Equals(typeName, StringComparison.OrdinalIgnoreCase) && c.EndPointName.Equals(endPointName, StringComparison.OrdinalIgnoreCase))) {
+                this.Routes.Add(new MessageTypeMapping(typeName, endPointName, MessageDirectionOptions.Inbound, false));
+            }
+
+            return (IConfigure)this;
+
+        }
+
         void IConfigureInternal.RouteMessage(string typeName, string endPointName, bool discardIfDown) {
 
-            this.Routes.Add(new MessageTypeMapping() { EndPointName = endPointName, TypeName = typeName.ToLower(), DiscardIfDown = discardIfDown });
+            this.Routes.Add(new MessageTypeMapping(typeName, endPointName, MessageDirectionOptions.Outbound, discardIfDown) );
 
         }
 
@@ -156,7 +171,7 @@ namespace ShortBus.Configuration {
             if (this.EndPoints == null) { this.EndPoints = new ConcurrentDictionary<string, IEndPoint>(); }
             this.EndPoints.TryAdd(messageTypeName, handler);
 
-    
+            ((IConfigure)this).RouteMessage<T>(messageTypeName, false);
 
             return (IConfigure)this;
         }

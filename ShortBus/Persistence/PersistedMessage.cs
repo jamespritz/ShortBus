@@ -17,9 +17,9 @@ namespace ShortBus.Persistence {
     }
 
     //handler, type, date, retrycount
-    public struct Route {
+    public class Route {
         public string EndPointName { get; set; }
-        public DateTime? Routed { get; set; }
+        public DateTime Routed { get; set; }
         public EndPointTypeOptions EndPointType { get; set; }
 
     }
