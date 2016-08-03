@@ -296,16 +296,13 @@ namespace Sandbox {
              
             
 
-
-
-
             Bus.OnStarted += onStarted;
             Bus.OnProcessing += onProcessing;
             Bus.OnStalled += onStalled;
             Bus.OnThreadStarted += onThreadStarted;
             Bus.Start();
 
-            messageSendTimer.AutoReset = true;
+            messageSendTimer.AutoReset = false;
             messageSendTimer.Enabled = true;
             messageSendTimer.Interval = 1000;
             messageSendTimer.Elapsed += MessageSendTimer_Elapsed;
@@ -318,14 +315,19 @@ namespace Sandbox {
         }
 
         private static void MessageSendTimer_Elapsed(object sender, System.Timers.ElapsedEventArgs e) {
-            using (TransactionScope scope = new TransactionScope(TransactionScopeOption.Required)) {
+            for (int z = 0; z < 1; z++) {
+                using (TransactionScope scope = new TransactionScope(TransactionScopeOption.Required)) {
 
 
-                Bus.SendMessage<ShortBus.TestMessage>(new TestMessage() { Property = counter.ToString() });
-                counter += 1;
-                scope.Complete();
 
+                    Bus.SendMessage<ShortBus.TestMessage>(new TestMessage() { Property = counter.ToString() });
+                    counter += 1;
+                    scope.Complete();
+
+                }
             }
+
+
         }
 
         private static void onThreadStarted(object sender, EventArgs args) {

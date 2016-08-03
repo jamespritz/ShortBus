@@ -140,9 +140,82 @@ namespace ShortBus {
             }
 
             HandlerResponse IMessageHandler.Handle(PersistedMessage message) {
-                throw new NotImplementedException();
+
+                
+                string payLoad = message.PayLoad;
+                EndpointRegistrationRequest request = Newtonsoft.Json.JsonConvert.DeserializeObject<EndpointRegistrationRequest>(payLoad);
+
+                EndpointConfigPersist<EndPointConfig> config = new EndpointConfigPersist<EndPointConfig>(configure.Persitor);
+                EndPointConfig stored = config.GetConfig();
+
+                bool changed = false;
+
+                //check if we know about the endpoint
+                if (stored.EndPoints.Count(g => g.Name.Equals(request.Name, StringComparison.OrdinalIgnoreCase)) == 0) {
+                    stored.EndPoints.Add(new EndPoint() { Name = request.Name, EndPointAddress = request.EndPoint, EndPointType = request.EndPointType });
+                    changed = true;
+                }
+
+                List<MessageTypeMapping> newRoutes = new List<MessageTypeMapping>();
+                List<MessageTypeMapping> changedRoutes = new List<MessageTypeMapping>();
+                //if endpoint has subscriptions, make sure they are in my config so I don't forget about them
+                request.SubscriptionRequests.ForEach(r => {
+
+                    var storedSubscription = stored.Subscriptions.FirstOrDefault(s => s.TypeName.Equals(r.MessageTypeName, StringComparison.OrdinalIgnoreCase));
+                    if (storedSubscription == null) {
+                        newRoutes.Add(new MessageTypeMapping(r.MessageTypeName, request.Name, MessageDirectionOptions.Outbound, r.DiscardIfSubscriberIsDown));
+                    } else {
+                        if (storedSubscription.DiscardIfDown != r.DiscardIfSubscriberIsDown) {
+                            storedSubscription.DiscardIfDown = r.DiscardIfSubscriberIsDown;
+                            changedRoutes.Add(new MessageTypeMapping(r.MessageTypeName, request.Name, MessageDirectionOptions.Outbound, r.DiscardIfSubscriberIsDown));
+                            changed = true;
+                        }
+                    }
+
+                });
+                if (newRoutes.Count() > 0) {
+                    stored.Subscriptions.AddRange(from r in newRoutes select r);
+                    changed = true;
+                }
+
+                if (changed) {
+                    
+                    configure.EndPoints.TryAdd(request.Name, new RESTEndPoint(new RESTSettings(request.EndPoint, request.EndPointType)));
+
+
+                    newRoutes.ForEach(r => {
+                       ((IConfigureInternal)configure).RouteMessage(r.TypeName, r.EndPointName, r.DiscardIfDown);
+                    });
+                    changedRoutes.ForEach(r => {
+                        MessageTypeMapping existing = configure.Routes.FirstOrDefault(
+                            g => g.EndPointName.Equals(r.EndPointName, StringComparison.OrdinalIgnoreCase) &&
+                                g.TypeName.Equals(r.TypeName, StringComparison.OrdinalIgnoreCase)
+                            );
+                        if (existing != null) {
+                            existing.DiscardIfDown = r.DiscardIfDown;
+                        }
+
+                    });
+
+                    //make sure endpointsrunning has an entry for every routed endpoint
+                    var activeEndpoints = from r in configure.Routes group r by r.EndPointName into grouped
+                                          select new { EP = grouped.Key };
+                    activeEndpoints.ToList().ForEach(g => {
+                        endPointsRunning.AddOrUpdate(g.EP, new pubStat() { Has = true, Processing = false }
+                        , (r, z) => { return new pubStat() { Has = true, Processing = false }; });
+
+                    });
+
+                    config.UpdateConfig(stored);
+
+                    
+                }
+
+                StartProcessing();
+                return HandlerResponse.Handled();
             }
-        }
+
+        }//end handler
 
 
 
@@ -308,7 +381,7 @@ namespace ShortBus {
                 if (configure.EndPoints.ContainsKey(s.EndPointName)) {
                     IEndPoint endpoint = configure.EndPoints[s.EndPointName];
 
-                    if (endpoint.GetType().IsAssignableFrom(typeof(IMessageRouter))) {
+                    if (typeof(IMessageRouter).IsAssignableFrom(endpoint.GetType())) {
 
                         IMessageRouter router = (IMessageRouter)endpoint;
                         if (!router.ServiceIsDown()) {
@@ -371,9 +444,37 @@ namespace ShortBus {
 
             endPointsRunning = new ConcurrentDictionary<string, pubStat>();
 
-
+            
             ((IConfigure)configure).RegisterMessageHandler<EndpointRegistrationRequest>(new EndpointRegistrationHandler());
 
+            var subscriptions = (from r in configure.Routes
+                                 where r.Direction == MessageDirectionOptions.Inbound
+                                 group r by r.EndPointName into grouped
+                                 select new { EndPointName = grouped.Key, Routes = grouped });
+            foreach (var endPoint in subscriptions) {
+
+                EndpointRegistrationRequest request = new EndpointRegistrationRequest() {
+                    EndPoint = configure.myEndPoint.EndPointAddress
+                    , EndPointType = configure.myEndPoint.EndPointType
+                    , GUID = configure.ApplicationGUID
+                    , Name = configure.myEndPoint.Name
+                    , SubscriptionRequests = (from r in endPoint.Routes select new SubscriptionRequest() {
+                        DiscardIfSubscriberIsDown = r.DiscardIfDown
+                        , MessageTypeName = r.TypeName
+                    }).ToList()
+                };
+                string payLoad = JsonConvert.SerializeObject(request);
+                PersistedMessage msg = new PersistedMessage() {
+                    Headers = new Dictionary<string, string>()
+                    , MessageType = Util.Util.GetTypeName(typeof(EndpointRegistrationRequest))
+                    , Ordinal = 0
+                    , PayLoad = payLoad
+                    , Status = PersistedMessageStatusOptions.ReadyToProcess
+                };
+                msg.Routes.Add(new Route() { EndPointName = configure.myEndPoint.Name, EndPointType = configure.myEndPoint.EndPointType, Routed = DateTime.UtcNow });
+                IMessageRouter router = (IMessageRouter)configure.EndPoints[endPoint.EndPointName];
+                router.Publish(msg);
+            }
 
             configure.EndPoints.ToList().ForEach(k => {
 
@@ -381,7 +482,8 @@ namespace ShortBus {
 
             });
 
-            PingEndPoints();
+            // TODO: Ping Endpoints
+            //PingEndPoints();
 
             configure.Persitor.UnMarkAll();
 
@@ -538,7 +640,7 @@ namespace ShortBus {
             try {
                 int id = SyncGetPadding();
 
-                var routes = configure.Routes.Where(g => g.TypeName.Equals(message.MessageType, StringComparison.OrdinalIgnoreCase));
+                var routes = configure.Routes.Where(g => g.TypeName.Equals(message.MessageType, StringComparison.OrdinalIgnoreCase) && g.Direction == MessageDirectionOptions.Outbound);
                 List<PersistedMessage> messages = new List<PersistedMessage>();
 
                 List<string> endPointsToTrigger = new List<string>();
@@ -563,12 +665,15 @@ namespace ShortBus {
                     messages.Add(copied);
                 }
 
-                if (configure.Persitor.ServiceIsDown()) {
-                    throw new ServiceEndpointDownException("Message Peristor is Down");
+                //in other words, if nothing is listening, don't bother persisting.
+                if (messages.Count > 0) {
+                    if (configure.Persitor.ServiceIsDown()) {
+                        throw new ServiceEndpointDownException("Message Peristor is Down");
+                    }
+
+                    configure.Persitor.Persist(messages);
+
                 }
-
-                configure.Persitor.Persist(messages);
-
 
                 foreach (string n in endPointsToTrigger) {
                     endPointsRunning.AddOrUpdate(n, new pubStat() { Has = true, Processing = false }, (k, v) => {
@@ -590,7 +695,8 @@ namespace ShortBus {
 
         }
 
-
+        // TODO: add sender to persistedmessages.route
+        // TODO: need to tell process to grab reschedules (i.e., endpointswithmessage = true)
         private static EndPointResponse RouteMessage(PersistedMessage msg) {
 
             EndPointResponse toReturn = new EndPointResponse() { Status = false };
@@ -598,7 +704,7 @@ namespace ShortBus {
 
                 MessageTypeMapping route = configure.Routes.FirstOrDefault(g => g.EndPointName.Equals(msg.Queue, StringComparison.OrdinalIgnoreCase) && g.TypeName.Equals(msg.MessageType, StringComparison.OrdinalIgnoreCase));
                 IEndPoint endPoint = configure.EndPoints.FirstOrDefault(g => g.Key.Equals(msg.Queue, StringComparison.OrdinalIgnoreCase)).Value;
-                if (endPoint.GetType().IsAssignableFrom(typeof(IMessageHandler))) {
+                if (typeof(IMessageHandler).IsAssignableFrom(endPoint.GetType())) {
 
                     IMessageHandler handler = (IMessageHandler)endPoint;
                     toReturn.EndPointType = EndPointTypeOptions.Handler;
@@ -737,13 +843,18 @@ namespace ShortBus {
                 
                 bool processEndPoint = true;
 
-                // TODO: deal with subsub
+    
+                // TODO: ?? should all endpoints be registered with lowercase b/c of indexor
+
+                // TODO: add config for restart time span
+
                 //if the subscription subscriber has messages, we need to process those immediately
                 //this ensures that the subscriber gets all messsages from the time it subscribes
-                pubStat s = endPointsRunning["subsub"];
+                string registrationQueue = Util.Util.GetTypeName(typeof(EndpointRegistrationRequest)).ToLower();
+                pubStat s = endPointsRunning[registrationQueue];
                 if (s.Has && !s.Processing) { // if message on queue, but not processing... process it immediately
-                    toReturn = "subsub";
-                    endPointsRunning.AddOrUpdate("subsub", new pubStat() { Has = true, Processing = true }, (k, v) => {
+                    toReturn = registrationQueue;
+                    endPointsRunning.AddOrUpdate(registrationQueue, new pubStat() { Has = true, Processing = true }, (k, v) => {
                         return new pubStat() { Has = true, Processing = true };
                     });
                     processEndPoint = false;

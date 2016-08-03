@@ -26,7 +26,6 @@ namespace PublisherDemo {
                      , EndPointType = ShortBus.Publish.EndPointTypeOptions.Source
                      , Name = ShortBus.Bus.ApplicationName
                 })
-                .AsAPublisher
                 .MaxThreads(4);
                 
         }

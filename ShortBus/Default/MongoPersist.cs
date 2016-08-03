@@ -294,23 +294,25 @@ namespace ShortBus.Default {
 
 
 
-
+        IMongoCollection<PersistedMessage> myCollection = null;
         public virtual IMongoCollection<PersistedMessage> GetCollection() {
 
-            IMongoCollection<PersistedMessage> collection = null;
+            
             try {
+                if (myCollection == null) {
 
-                IMongoDatabase db = this.GetDatabase();
+                    IMongoDatabase db = this.GetDatabase();
 
-                collection = db.GetCollection<PersistedMessage>(this.settings.CollectionName);
+                    myCollection = db.GetCollection<PersistedMessage>(this.settings.CollectionName);
 
-
+                }
 
             } catch (Exception e) {
                 this.serviceDown = true;
                 throw new ServiceEndpointDownException("Mongo Persist Service is Down", e);
             }
-            return collection;
+
+            return myCollection;
         }
 
 
@@ -505,7 +507,7 @@ namespace ShortBus.Default {
             try {
                 var filter = Builders<PersistedMessage>.Filter.Eq(m => m.Id, Id);
 
-
+                
                 pop = collection.FindOneAndDelete(filter);
             } catch (Exception e) {
                 this.serviceDown = true;

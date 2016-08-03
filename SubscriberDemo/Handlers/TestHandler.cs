@@ -8,6 +8,7 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using ShortBus.Publish;
 
 namespace SubscriberDemo.Handlers {
     public class TestHandler : IMessageHandler {
@@ -16,13 +17,14 @@ namespace SubscriberDemo.Handlers {
 
 
             TestMessage m = JsonConvert.DeserializeObject<TestMessage>(message.PayLoad);
-            if (message.HandleRetryCount == 0) {
+            if (message.RetryCount == 0) {
                 Console.WriteLine("Recieved {0}, rescheduling", m.Property);
                 return HandlerResponse.Retry(TimeSpan.FromMinutes(1));
             } else {
                 Console.WriteLine("processing {0}", m.Property);
                 return HandlerResponse.Handled();
             }
+  
           
         }
 
@@ -30,6 +32,12 @@ namespace SubscriberDemo.Handlers {
             get {
 
                 return false;
+            }
+        }
+
+        EndPointTypeOptions IEndPoint.EndPointType {
+            get {
+                return EndPointTypeOptions.Handler;
             }
         }
     }

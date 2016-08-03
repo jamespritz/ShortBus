@@ -20,19 +20,33 @@ namespace ShortBus.Configuration {
         public string Name { get; set; }
         public EndPointTypeOptions EndPointType { get; set; }
         public string EndPointAddress { get; set; }
+        
 
     }
 
     public class EndPointConfig: EndPointConfigBase {
         //endpoints (name, address, type)
         //subscriptions
-        public List<EndPoint> EndPoints { get; set; }
+        private List<EndPoint> endPoints = null;
+        public List<EndPoint> EndPoints {
+            get {
+                if (this.endPoints == null) {
+                    this.endPoints = new List<EndPoint>();
+                    
+                }
+                return this.endPoints;
+            }
+            set {
+                this.endPoints = value;
+            }
+        }
         private List<MessageTypeMapping> subscriptions;
         public List<MessageTypeMapping> Subscriptions {  get {
                 if (this.subscriptions == null) {
-                    return new List<MessageTypeMapping>();
+                    this.subscriptions = new List<MessageTypeMapping>();
 
-                } else return this.subscriptions;
+                }
+                return this.subscriptions;
             }
             set {
                 this.subscriptions = value;

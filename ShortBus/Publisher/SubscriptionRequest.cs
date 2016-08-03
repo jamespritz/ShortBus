@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace ShortBus.Publish {
 
-    public struct SubscriptionRequest {
+    public class SubscriptionRequest {
         public string MessageTypeName { get; set; }
         public bool DiscardIfSubscriberIsDown { get; set; }
     }

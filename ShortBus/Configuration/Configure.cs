@@ -208,9 +208,9 @@ namespace ShortBus.Configuration {
             bool hasEndpoints = ((this.EndPoints != null) && this.EndPoints.Count() > 0);
    
 
-            if (!hasEndpoints) { 
-                throw new BusNotConfiguredException("Endpoint", "No Message Endpoints have been added");
-            }
+            //if (!hasEndpoints) { 
+            //    throw new BusNotConfiguredException("Endpoint", "No Message Endpoints have been added");
+            //}
            
             //if ((this.Routes != null) && this.Routes.Count() > 0) {
 
