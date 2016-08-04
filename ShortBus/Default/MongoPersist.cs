@@ -518,7 +518,7 @@ namespace ShortBus.Default {
 
         }
 
-        PersistedMessage IPersist.Mark(Guid Id) {
+        PersistedMessage IPersist.Mark(Guid Id, PersistedMessageStatusOptions mark) {
             if (this.serviceDown) {
                 throw new ServiceEndpointDownException("Mongo Persist Service is Down");
             }
@@ -527,7 +527,7 @@ namespace ShortBus.Default {
             IMongoCollection<PersistedMessage> collection = this.GetCollection();
 
             try {
-                var update = Builders<PersistedMessage>.Update.Set(g => g.Status, PersistedMessageStatusOptions.Marked);
+                var update = Builders<PersistedMessage>.Update.Set(g => g.Status, mark);
                 var filter = Builders<PersistedMessage>.Filter.Eq(m => m.Id, Id);
 
 

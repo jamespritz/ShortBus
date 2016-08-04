@@ -56,7 +56,7 @@ namespace ShortBus.Configuration {
             db.Persist(new List<PersistedMessage>() { newConfig });
             //peek pulls latest anyway, so if this fails, no harm done
             if (oldConfig != null) {
-                db.Mark(oldConfig.Id);
+                db.Mark(oldConfig.Id, PersistedMessageStatusOptions.Marked);
             }
 
         }

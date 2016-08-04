@@ -32,7 +32,8 @@ namespace ShortBus.Persistence {
 
         PersistedMessage PeekAndMarkNext(string q);
 
-        PersistedMessage Mark(Guid id);
+        PersistedMessage Mark(Guid id, PersistedMessageStatusOptions mark);
+   
 
         PersistedMessage Processing(Guid id);
 

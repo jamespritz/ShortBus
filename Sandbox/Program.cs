@@ -285,6 +285,7 @@ namespace Sandbox {
             Bus.Configure
              .PersistTo(new MongoPersistProvider(@"mongodb://127.0.0.1:27017", MongoDataBaseName.UseExisting("ShortBus")))
              .MaxThreads(4)
+             
              .MyEndPoint(new ShortBus.Configuration.EndPoint() {
                  EndPointAddress = @"http://localhost:9872"
                  , EndPointType = ShortBus.Publish.EndPointTypeOptions.Source
@@ -315,7 +316,7 @@ namespace Sandbox {
         }
 
         private static void MessageSendTimer_Elapsed(object sender, System.Timers.ElapsedEventArgs e) {
-            for (int z = 0; z < 1; z++) {
+            for (int z = 0; z < 20; z++) {
                 using (TransactionScope scope = new TransactionScope(TransactionScopeOption.Required)) {
 
 

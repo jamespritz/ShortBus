@@ -24,9 +24,9 @@ namespace ShortBus {
         private IEnumerable<PersistedMessage> messages = null;
         private IPersist persistor = null;
         private string txId = string.Empty;
-        private Task whenDone = null;
+        private Action whenDone = null;
 
-        public string SendMessage(IEnumerable<PersistedMessage> messages, IPersist persistor, Task whenDone) {
+        public string SendMessage(IEnumerable<PersistedMessage> messages, IPersist persistor, Action whenDone) {
 
             string txId = string.Empty;
             Transaction currentTx = Transaction.Current;
@@ -44,7 +44,7 @@ namespace ShortBus {
                     m.TransactionID = txId;
                 }
                 persistor.Persist(messages);
-                whenDone.Start();
+                whenDone.Invoke();
             }
 
             return txId;
@@ -54,7 +54,7 @@ namespace ShortBus {
         void IEnlistmentNotification.Commit(Enlistment enlistment) {
             persistor.CommitBatch(this.txId);
             enlistment.Done();
-            whenDone.Start();
+            whenDone.Invoke();
         }
 
         void IEnlistmentNotification.InDoubt(Enlistment enlistment) {
@@ -209,6 +209,12 @@ namespace ShortBus {
                     config.UpdateConfig(stored);
 
                     
+                }
+                IMessageRouter router =  (IMessageRouter)configure.EndPoints[request.Name];
+                if (router.ServiceIsDown()) {
+                    router.ResetConnection(request.EndPoint);
+                    endPointsRunning.AddOrUpdate(request.Name, new pubStat() { Has = true, Processing = false }, (c, z) => { return new pubStat() { Has = true, Processing = false }; });
+
                 }
 
                 StartProcessing();
@@ -525,7 +531,7 @@ namespace ShortBus {
             }
 
             //trigger threads to start waiting
-            resetEvent.Set();
+            YieldNextThread();
             RaiseOnProcessing();
 
         }
@@ -541,6 +547,10 @@ namespace ShortBus {
             Stall(threadId);
         }
 
+        private static void YieldNextThread() {
+            resetEvent.Set();
+
+        }
 
 
         public static string SendMessage<T>(T message) {
@@ -596,8 +606,8 @@ namespace ShortBus {
                     throw new ServiceEndpointDownException("Message Peristor is Down");
                 }
 
-                Task whenDone = new Task((p) => {
-                    IEnumerable<MessageTypeMapping> pubs = ((IEnumerable<MessageTypeMapping>)p);
+                Action whenDone = new Action(() => {
+                    IEnumerable<MessageTypeMapping> pubs = routes;
 
                     foreach (MessageTypeMapping m in pubs) {
                         endPointsRunning.AddOrUpdate(m.EndPointName, new pubStat() { Has = true, Processing = false }, (k, v) => {
@@ -612,7 +622,7 @@ namespace ShortBus {
 
                     StartProcessing();
 
-                }, routes);
+                });
 
                 TxRM rm = new TxRM();
 
@@ -771,7 +781,7 @@ namespace ShortBus {
 
                                 configure.Persitor.Processing(msg.Id);
                                 //we have our value, so pass on to next thread
-                                resetEvent.Set();
+                                YieldNextThread();
 
 
 
@@ -783,9 +793,17 @@ namespace ShortBus {
                                         if (response.Status) {
                                             //if localstorage experiences an error, it will shut itself down
                                             var popped = configure.Persitor.Pop(msg.Id);
-                                        } else if (response.EndPointType == EndPointTypeOptions.Handler) {
-                                            if (response.HandlerResponse.Status == HandlerStatusOptions.Reschedule) {
-                                                var popped = configure.Persitor.Reschedule(msg.Id, response.HandlerResponse.RescheduleIncrement);
+                                        } else {
+                                            if (response.EndPointType == EndPointTypeOptions.Handler) {
+                                                if (response.HandlerResponse.Status == HandlerStatusOptions.Reschedule) {
+                                                    var popped = configure.Persitor.Reschedule(msg.Id, response.HandlerResponse.RescheduleIncrement);
+
+                                                } else {
+                                                    var popped = configure.Persitor.Mark(msg.Id, PersistedMessageStatusOptions.Exception);
+                                                }
+                                            } else { //router
+                                                //set it back to marked so it will try again
+                                                var popped = configure.Persitor.Mark(msg.Id, PersistedMessageStatusOptions.Marked);
                                             }
                                         }
 
@@ -807,14 +825,14 @@ namespace ShortBus {
                                     return new pubStat() { Has = false, Processing = false };
                                 });
 
-                                resetEvent.Set();
+                                YieldNextThread();
                             }
 
                         } else {
                             //if we don't have a q to process, allow the next thread to do its 
                             //work so it can shut itself down, too
                             process = false;
-                            resetEvent.Set();
+                            YieldNextThread();
                         }
 
 
