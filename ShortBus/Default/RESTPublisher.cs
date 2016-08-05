@@ -55,7 +55,7 @@ namespace ShortBus.Default {
 
         bool IMessageRouter.ResetConnection() {
             this.ImDown = false;
-            return this.ImDown;
+            return !this.ImDown;
         }
         bool IMessageRouter.ResetConnection(string endPointAddress) {
             this.settings.URL = endPointAddress;

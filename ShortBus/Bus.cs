@@ -213,6 +213,7 @@ namespace ShortBus {
                 IMessageRouter router =  (IMessageRouter)configure.EndPoints[request.Name];
                 if (router.ServiceIsDown()) {
                     router.ResetConnection(request.EndPoint);
+                    configure.Persitor.ToggleMarkAll(request.Name, PersistedMessageStatusOptions.ReadyToProcess, PersistedMessageStatusOptions.Marked);
                     endPointsRunning.AddOrUpdate(request.Name, new pubStat() { Has = true, Processing = false }, (c, z) => { return new pubStat() { Has = true, Processing = false }; });
 
                 }
@@ -422,83 +423,87 @@ namespace ShortBus {
         public static void Start() {
 
 
-            configure.TestConfig();
+            try {
+                configure.TestConfig();
 
 
-            maxThreads = configure.MaxThreads;// configure.Publishers.Count > configure.maxSourceThreads ? configure.maxSourceThreads : configure.Publishers.Count;
+                maxThreads = configure.MaxThreads;// configure.Publishers.Count > configure.maxSourceThreads ? configure.maxSourceThreads : configure.Publishers.Count;
 
-            stopped = false;
-
-            
-
-
-            RaiseOnStarted();
-            CTS = new CancellationTokenSource();
-
-            //get any stored config before starting
-            ResolvePersistedConfig();
+                stopped = false;
 
 
 
-            taskThreads = new List<Task>();
-            taskThreadsRunning = new ConcurrentDictionary<int, bool>();
-            for (int i = 1; i <= maxThreads; i++) {
-                taskThreads.Add(null);
-                taskThreadsRunning.AddOrUpdate(i, true, (c, z) => { return true; });
+
+                RaiseOnStarted();
+                CTS = new CancellationTokenSource();
+
+                //get any stored config before starting
+                ResolvePersistedConfig();
+
+
+
+                taskThreads = new List<Task>();
+                taskThreadsRunning = new ConcurrentDictionary<int, bool>();
+                for (int i = 1; i <= maxThreads; i++) {
+                    taskThreads.Add(null);
+                    taskThreadsRunning.AddOrUpdate(i, true, (c, z) => { return true; });
+                }
+
+
+                endPointsRunning = new ConcurrentDictionary<string, pubStat>();
+
+
+                ((IConfigure)configure).RegisterMessageHandler<EndpointRegistrationRequest>(new EndpointRegistrationHandler());
+
+                var subscriptions = (from r in configure.Routes
+                                     where r.Direction == MessageDirectionOptions.Inbound
+                                     group r by r.EndPointName into grouped
+                                     select new { EndPointName = grouped.Key, Routes = grouped });
+                foreach (var endPoint in subscriptions) {
+
+                    EndpointRegistrationRequest request = new EndpointRegistrationRequest() {
+                        EndPoint = configure.myEndPoint.EndPointAddress
+                        , EndPointType = configure.myEndPoint.EndPointType
+                        , GUID = configure.ApplicationGUID
+                        , Name = configure.myEndPoint.Name
+                        , SubscriptionRequests = (from r in endPoint.Routes select new SubscriptionRequest() {
+                            DiscardIfSubscriberIsDown = r.DiscardIfDown
+                            , MessageTypeName = r.TypeName
+                        }).ToList()
+                    };
+                    string payLoad = JsonConvert.SerializeObject(request);
+                    PersistedMessage msg = new PersistedMessage() {
+                        Headers = new Dictionary<string, string>()
+                        , MessageType = Util.Util.GetTypeName(typeof(EndpointRegistrationRequest))
+                        , Ordinal = 0
+                        , PayLoad = payLoad
+                        , Status = PersistedMessageStatusOptions.ReadyToProcess
+                    };
+                    msg.Routes.Add(new Route() { EndPointName = configure.myEndPoint.Name, EndPointType = configure.myEndPoint.EndPointType, Routed = DateTime.UtcNow });
+                    IMessageRouter router = (IMessageRouter)configure.EndPoints[endPoint.EndPointName];
+                    router.Publish(msg);
+                }
+
+                configure.EndPoints.ToList().ForEach(k => {
+
+                    endPointsRunning.AddOrUpdate(k.Key, new pubStat() { Has = true, Processing = false }, (c, z) => { return new pubStat() { Has = true, Processing = false }; });
+
+                });
+
+                // TODO: Ping Endpoints
+                //PingEndPoints();
+
+                configure.Persitor.ToggleMarkAll(PersistedMessageStatusOptions.ReadyToProcess, PersistedMessageStatusOptions.Marked);
+
+                restartTimer = new System.Timers.Timer();
+                restartTimer.Interval = 1000;
+                restartTimer.Enabled = true;
+                restartTimer.AutoReset = false;
+                restartTimer.Elapsed += Restart;
+            } catch (Exception e) {
+                throw new ServiceEndpointDownException("Bus Persistor is Down");
+
             }
-
-
-            endPointsRunning = new ConcurrentDictionary<string, pubStat>();
-
-            
-            ((IConfigure)configure).RegisterMessageHandler<EndpointRegistrationRequest>(new EndpointRegistrationHandler());
-
-            var subscriptions = (from r in configure.Routes
-                                 where r.Direction == MessageDirectionOptions.Inbound
-                                 group r by r.EndPointName into grouped
-                                 select new { EndPointName = grouped.Key, Routes = grouped });
-            foreach (var endPoint in subscriptions) {
-
-                EndpointRegistrationRequest request = new EndpointRegistrationRequest() {
-                    EndPoint = configure.myEndPoint.EndPointAddress
-                    , EndPointType = configure.myEndPoint.EndPointType
-                    , GUID = configure.ApplicationGUID
-                    , Name = configure.myEndPoint.Name
-                    , SubscriptionRequests = (from r in endPoint.Routes select new SubscriptionRequest() {
-                        DiscardIfSubscriberIsDown = r.DiscardIfDown
-                        , MessageTypeName = r.TypeName
-                    }).ToList()
-                };
-                string payLoad = JsonConvert.SerializeObject(request);
-                PersistedMessage msg = new PersistedMessage() {
-                    Headers = new Dictionary<string, string>()
-                    , MessageType = Util.Util.GetTypeName(typeof(EndpointRegistrationRequest))
-                    , Ordinal = 0
-                    , PayLoad = payLoad
-                    , Status = PersistedMessageStatusOptions.ReadyToProcess
-                };
-                msg.Routes.Add(new Route() { EndPointName = configure.myEndPoint.Name, EndPointType = configure.myEndPoint.EndPointType, Routed = DateTime.UtcNow });
-                IMessageRouter router = (IMessageRouter)configure.EndPoints[endPoint.EndPointName];
-                router.Publish(msg);
-            }
-
-            configure.EndPoints.ToList().ForEach(k => {
-
-                endPointsRunning.AddOrUpdate(k.Key, new pubStat() { Has = true, Processing = false }, (c, z) => { return new pubStat() { Has = true, Processing = false }; });
-
-            });
-
-            // TODO: Ping Endpoints
-            //PingEndPoints();
-
-            configure.Persitor.ToggleMarkAll(PersistedMessageStatusOptions.ReadyToProcess, PersistedMessageStatusOptions.ReadyToProcess);
-
-            restartTimer = new System.Timers.Timer();
-            restartTimer.Interval = 1000;
-            restartTimer.Enabled = true;
-            restartTimer.AutoReset = false;
-            restartTimer.Elapsed += Restart;
-     
         }
 
         private static void Restart(object sender, System.Timers.ElapsedEventArgs e) {

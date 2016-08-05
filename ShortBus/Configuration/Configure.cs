@@ -205,7 +205,7 @@ namespace ShortBus.Configuration {
             if (this.Persitor == null) {
 
                 try {
-                    CancellationTokenSource cts = new CancellationTokenSource();
+                    CancellationTokenSource cts = new CancellationTokenSource(2000);
                     Task<IPersist> t = this.storageProvider.CreatePersistAsync(this, cts.Token);
                    
                     t.Wait();
