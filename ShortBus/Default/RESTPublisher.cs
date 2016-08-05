@@ -69,7 +69,7 @@ namespace ShortBus.Default {
 
 
         //postmessage
-        private RouteResponse Post(PersistedMessage post, string command)  {
+        private RouteResponse Post(PersistedMessage post, string command) {
 
             RouteResponse toReturn = new RouteResponse() { PayLoad = null, Status = false };
             try {
@@ -118,17 +118,24 @@ namespace ShortBus.Default {
                     responseText = rdr.ReadToEnd();
 
 
-                    
+
                     rdr.Close();
                     response.Close();
                 }
 
                 toReturn = JsonConvert.DeserializeObject<RouteResponse>(responseText);
-                
+
+
+            } catch (System.AggregateException ae) {
+
+                this.ImDown = true;
+            
+            } catch (WebException e) {
+           
+                this.ImDown = true;
                 
             } catch (Exception e) {
                 this.ImDown = true;
-                
             }
 
             return toReturn;

@@ -491,7 +491,7 @@ namespace ShortBus {
             // TODO: Ping Endpoints
             //PingEndPoints();
 
-            configure.Persitor.UnMarkAll();
+            configure.Persitor.ToggleMarkAll(PersistedMessageStatusOptions.ReadyToProcess, PersistedMessageStatusOptions.ReadyToProcess);
 
             restartTimer = new System.Timers.Timer();
             restartTimer.Interval = 1000;
@@ -517,10 +517,9 @@ namespace ShortBus {
                     //after i has been incremeneted.
                     int q = i;
 
-                    t = Task.Factory.StartNew(() => {
-                        RouteNext(q);
-                    }, CTS.Token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+                    t = Task.Run(() => { RouteNext(q); }, CTS.Token);
 
+           
                     taskThreadsRunning.AddOrUpdate(i, true, (k, v) => { return true; });
 
                     taskThreads[i - 1] = t;
@@ -779,7 +778,7 @@ namespace ShortBus {
                             //notifies that there is something to process.
                             if (msg != null) {
 
-                                configure.Persitor.Processing(msg.Id);
+                                configure.Persitor.Mark(msg.Id, PersistedMessageStatusOptions.Processing);
                                 //we have our value, so pass on to next thread
                                 YieldNextThread();
 
@@ -945,7 +944,7 @@ namespace ShortBus {
                             toReturn = null;
                         } else {
 
-                            toReturn = storage.PeekAndMarkNext(q);
+                            toReturn = storage.PeekAndMarkNext(q, PersistedMessageStatusOptions.Marked);
                         }
                     } catch (Exception) {
                         toReturn = null;

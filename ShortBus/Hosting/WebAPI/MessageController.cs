@@ -14,9 +14,16 @@ namespace ShortBus.Hosting.WebAPI {
         [HttpPost]
         public RouteResponse PostMessage(PersistedMessage message) {
 
-            Bus.ReceiveMessage(message);
+            RouteResponse toReturn = new RouteResponse() { Status = false };
+            try {
+                Bus.ReceiveMessage(message);
+                toReturn.Status = true;
 
-            return new RouteResponse() { Status = true };
+            } catch {
+                
+            }
+
+            return toReturn;
 
         }
 

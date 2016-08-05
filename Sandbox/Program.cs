@@ -316,7 +316,7 @@ namespace Sandbox {
         }
 
         private static void MessageSendTimer_Elapsed(object sender, System.Timers.ElapsedEventArgs e) {
-            for (int z = 0; z < 20; z++) {
+            for (int z = 0; z < 1; z++) {
                 using (TransactionScope scope = new TransactionScope(TransactionScopeOption.Required)) {
 
 

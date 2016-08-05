@@ -9,6 +9,7 @@ using MongoDB.Driver;
 using MongoDB.Bson;
 using ShortBus.Configuration;
 using ShortBus.Publish;
+using System.Threading;
 
 namespace ShortBus.Default {
 
@@ -113,73 +114,9 @@ namespace ShortBus.Default {
         //    return toReturn;
         //}
 
-        IPersist IPeristProvider.CreatePersist(IConfigure Configure) {
 
 
-            string collectionBase = string.Empty;
-
-            MongoPersist toReturn = null;
-            string collectionName = string.Empty;
-
-            bool CreateDatabase = this.dbName.DB == MongoDataBaseName.CREATE;
-            //if database provided, our collection names must be unique, so we factor in applicationname
-            if (!CreateDatabase) {
-          
-                collectionName = string.Format("{0}_{1}", Configure.ApplicationName, "messages");
-
-            } else { //if we are creating database, our collectionname can be generic
-                this.dbName = Configure.ApplicationName;
-                collectionName = "messages";
-            }
-
-
-
-
-            // TODO: test if database exists and that it is not configured for another collection
-
-            this.mongoProvider = new MongoProvider(server);
-
-            ////if not createdatabase, then the one passed in must exist
-            //if (!CreateDatabase) {
-            //    if (!this.DBExists()) {
-            //        throw new Exception(string.Format("{0} does not exists", this.dbName.DB));
-            //    }
-            //}
-
-
-
-            if (this.CollectionExists(collectionName)) {
-
-                toReturn = new MongoPersist(new MongoSettings() { ServerName = this.server, DataBaseName = this.dbName.DB, CollectionName = collectionName });
-                EndpointConfigPersist<EndPointConfigBase> configReader = new EndpointConfigPersist<EndPointConfigBase>(toReturn);
-                //get config and ensure its the same
-                EndPointConfigBase config = configReader.GetConfig();
-
-                if (config.ApplicationGUID != Configure.ApplicationGUID) {
-                    throw new Exception("Collection exists but has already been configured for another process");
-                }
-
-            } else { //if not, we must create
-
-                //create collection   
-                IMongoDatabase db = this.mongoProvider.GetClient().GetDatabase(dbName.DB);             
-                db.CreateCollection(collectionName);
-                IMongoCollection<PersistedMessage> collection = db.GetCollection<PersistedMessage>(collectionName);
-
-                collection = this.CreateIndexes(collection);
-
-                toReturn = new MongoPersist(new MongoSettings() { ServerName = this.server, DataBaseName = this.dbName.DB, CollectionName = collectionName });
-                EndpointConfigPersist<EndPointConfigBase> configReader = new EndpointConfigPersist<EndPointConfigBase>(toReturn);
-                EndPointConfigBase config = new EndPointConfigBase() { ApplicationGUID = Configure.ApplicationGUID, ApplicationName = Configure.ApplicationName, Version = "1.0" };
-                configReader.UpdateConfig(config);
-            }
-
-            return toReturn;
-
-        }
-
-
-        public virtual IMongoCollection<PersistedMessage> CreateIndexes(IMongoCollection<PersistedMessage> collection) {
+        public virtual async Task<IMongoCollection<PersistedMessage>> CreateIndexesAsync(IMongoCollection<PersistedMessage> collection, CancellationToken token) {
             var keys = Builders<PersistedMessage>.IndexKeys;
 
             var idxOrdinal = keys.Ascending(g => g.Ordinal);
@@ -187,7 +124,7 @@ namespace ShortBus.Default {
             CreateIndexModel<PersistedMessage> idxModelOrdinal = new CreateIndexModel<PersistedMessage>(idxOrdinal);
             CreateIndexModel<PersistedMessage> idxModelSend = new CreateIndexModel<PersistedMessage>(idxSend);
 
-            collection.Indexes.CreateMany(new CreateIndexModel<PersistedMessage>[] { idxModelOrdinal, idxModelSend });
+            await collection.Indexes.CreateManyAsync(new CreateIndexModel<PersistedMessage>[] { idxModelOrdinal, idxModelSend }, token);
             return collection;
 
         }
@@ -220,17 +157,15 @@ namespace ShortBus.Default {
 
 
 
-        bool CollectionExists(string collectionName) {
+        public async Task<bool> CollectionExistsAsync(string collectionName, CancellationToken token) {
 
             bool collectionExists = false;
 
-
-
+            
             IMongoDatabase db = this.mongoProvider.GetClient().GetDatabase(this.dbName.DB);
 
-
-            using (var cursor = db.ListCollections()) {
-                while (cursor.MoveNext()) {
+            using (var cursor = await db.ListCollectionsAsync(new ListCollectionsOptions() { Filter = Builders<BsonDocument>.Filter.Eq("name", collectionName) }, token)) {
+                while (await cursor.MoveNextAsync()) {
                     foreach (BsonDocument i in cursor.Current) {
                         string name = i["name"].ToString();
 
@@ -247,7 +182,85 @@ namespace ShortBus.Default {
             }
         }
 
+        async Task<IPersist> IPeristProvider.CreatePersistAsync(IConfigure Configure) {
 
+            CancellationTokenSource cts = new CancellationTokenSource();
+            return await ((IPeristProvider)this).CreatePersistAsync(Configure, cts.Token);
+
+        }
+
+        IPersist IPeristProvider.CreatePersist(IConfigure Configure) {
+
+
+            Task<IPersist> toReturn = ((IPeristProvider)this).CreatePersistAsync(Configure);
+            toReturn.Wait();
+            return toReturn.Result;
+
+        }
+
+
+        async Task<IPersist> IPeristProvider.CreatePersistAsync(IConfigure Configure, CancellationToken token) {
+
+            string collectionBase = string.Empty;
+
+            MongoPersist toReturn = null;
+            string collectionName = string.Empty;
+
+            bool CreateDatabase = this.dbName.DB == MongoDataBaseName.CREATE;
+            //if database provided, our collection names must be unique, so we factor in applicationname
+            if (!CreateDatabase) {
+
+                collectionName = string.Format("{0}_{1}", Configure.ApplicationName, "messages");
+
+            } else { //if we are creating database, our collectionname can be generic
+                this.dbName = Configure.ApplicationName;
+                collectionName = "messages";
+            }
+
+
+
+
+            // TODO: test if database exists and that it is not configured for another collection
+
+            this.mongoProvider = new MongoProvider(server);
+
+            ////if not createdatabase, then the one passed in must exist
+            //if (!CreateDatabase) {
+            //    if (!this.DBExists()) {
+            //        throw new Exception(string.Format("{0} does not exists", this.dbName.DB));
+            //    }
+            //}
+
+            bool exists = await this.CollectionExistsAsync(collectionName, token);
+
+            if (exists) {
+
+                toReturn = new MongoPersist(new MongoSettings() { ServerName = this.server, DataBaseName = this.dbName.DB, CollectionName = collectionName });
+                EndpointConfigPersist<EndPointConfigBase> configReader = new EndpointConfigPersist<EndPointConfigBase>(toReturn);
+                //get config and ensure its the same
+                EndPointConfigBase config = await configReader.GetConfigAsync(token);
+
+                if (config.ApplicationGUID != Configure.ApplicationGUID) {
+                    throw new Exception("Collection exists but has already been configured for another process");
+                }
+
+            } else { //if not, we must create
+
+                //create collection   
+                IMongoDatabase db = this.mongoProvider.GetClient().GetDatabase(dbName.DB);
+                await db.CreateCollectionAsync(collectionName, null, token);
+                IMongoCollection<PersistedMessage> collection = db.GetCollection<PersistedMessage>(collectionName);
+
+                collection = await this.CreateIndexesAsync(collection, token);
+
+                toReturn = new MongoPersist(new MongoSettings() { ServerName = this.server, DataBaseName = this.dbName.DB, CollectionName = collectionName });
+                EndpointConfigPersist<EndPointConfigBase> configReader = new EndpointConfigPersist<EndPointConfigBase>(toReturn);
+                EndPointConfigBase config = new EndPointConfigBase() { ApplicationGUID = Configure.ApplicationGUID, ApplicationName = Configure.ApplicationName, Version = "1.0" };
+                await configReader.UpdateConfigAsync(config, token);
+            }
+
+            return toReturn;
+        }
 
     }
 
@@ -317,16 +330,24 @@ namespace ShortBus.Default {
 
 
 
-        void IPersist.Persist(IEnumerable<PersistedMessage> messages) {
+        bool IPersist.Persist(IEnumerable<PersistedMessage> messages){
+            Task<bool> t = ((IPersist)this).PersistAsync(messages);
+            t.Wait();
+            return t.Result;
+        }
+
+        async Task<bool> IPersist.PersistAsync(IEnumerable<PersistedMessage> messages) {
+            CancellationTokenSource cts = new CancellationTokenSource();
+            return await ((IPersist)this).PersistAsync(messages, cts.Token);
+
+
+        }
+
+        async Task<bool> IPersist.PersistAsync(IEnumerable<PersistedMessage> messages, CancellationToken token) {
 
             if (this.serviceDown) {
                 throw new ServiceEndpointDownException("Mongo Persist Service is Down");
             }
-
-
-
-
-
 
 
             IMongoCollection<PersistedMessage> collection = this.GetCollection();
@@ -336,34 +357,109 @@ namespace ShortBus.Default {
                     m.DateStamp = DateTime.UtcNow;
                 }
 
-                collection.InsertMany(messages);
+                await collection.InsertManyAsync(messages, null, token);
+                return true;
 
             } catch (Exception e) {
                 this.serviceDown = true;
                 throw new ServiceEndpointDownException("Mongo Persist Service is Down", e);
             }
         }
-        //async Task<PersistedMessage> IPersist.GetNextAsync() {
 
-        //    collection = this.GetCollection();
+        bool IPersist.ServiceIsDown() {
+            return this.serviceDown;
+        }
 
-        //    var qfilter = Builders<PersistedMessage>.Filter.Ne("Status", "1");
-        //    var pop = await collection.Find(qfilter).SortByDescending(e => e.Sent).Limit(1).FirstOrDefaultAsync();
-        //    if (pop != null) { 
+        bool IPersist.ResetConnection() {
+            Task<bool> t = ((IPersist)this).ResetConnectionAsync();
+            t.Wait();
+            return t.Result;
+        }
 
-        //        var update = Builders<PersistedMessage>.Update.Set(g => g.Status, 1);
-        //        var ufilter = Builders<PersistedMessage>.Filter.Eq(g => g.Id, pop.Id);
-        //        pop = await collection.FindOneAndUpdateAsync(ufilter, update);
+        async Task<bool> IPersist.ResetConnectionAsync() {
+            CancellationTokenSource cts = new CancellationTokenSource();
+            return await ((IPersist)this).ResetConnectionAsync(cts.Token);
+        }
+
+        async Task<bool> IPersist.ResetConnectionAsync(CancellationToken token) {
+            this.serviceDown = false;
+
+            dbInstance = null;
+
+            try {
+
+
+                await ((IPersist)this).PersistAsync(new PersistedMessage[] { new PersistedMessage("Test") { Queue = "diag_test", DateStamp = DateTime.UtcNow } }, token);
+                PersistedMessage peeked = await ((IPersist)this).PeekAndMarkNextAsync("diag_test", PersistedMessageStatusOptions.Marked, token);
+                PersistedMessage popped = await ((IPersist)this).PopAsync(peeked.Id, token);
+
+            } catch (Exception) {
+                this.serviceDown = true;
+
+            }
+            return this.serviceDown;
+        }
+
+        PersistedMessage IPersist.PeekNext(string q) {
+
+            Task<PersistedMessage> t = ((IPersist)this).PeekNextAsync(q);
+            t.Wait();
+            return t.Result;
+        }
+
+        async Task<PersistedMessage> IPersist.PeekNextAsync(string q) {
+            CancellationTokenSource cts = new CancellationTokenSource();
+            return await ((IPersist)this).PeekNextAsync(q, cts.Token);
+        }
+
+        async Task<PersistedMessage> IPersist.PeekNextAsync(string q, CancellationToken token) {
+            if (this.serviceDown) {
+                throw new ServiceEndpointDownException("Mongo Persist Service is Down");
+            }
+
+            IMongoCollection<PersistedMessage> collection = this.GetCollection();
+            PersistedMessage pop = null;
+
+            try {
+                FilterDefinitionBuilder<PersistedMessage> fBuilder = Builders<PersistedMessage>.Filter;
+
+                var qfilter = fBuilder.And(fBuilder.Eq(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess), fBuilder.Eq(g => g.Queue, q), fBuilder.Lte(g => g.DateStamp, DateTime.UtcNow));
+                var sort = Builders<PersistedMessage>.Sort.Ascending(e => e.DateStamp).Ascending(e => e.Ordinal);
+                var options = new FindOptions<PersistedMessage>() { Sort = sort };
 
 
 
-        //    }
-        //    return pop;
+                using (IAsyncCursor<PersistedMessage> cursor = await collection.FindAsync(qfilter, options, token)) {
+                    while (await cursor.MoveNextAsync(token)) {
+                        if (cursor.Current.Count() > 0) {
+                            pop = cursor.Current.FirstOrDefault();
+                        }
+                    }
+                }
+                return pop;
 
-        //}
 
-        PersistedMessage IPersist.PeekAndMarkNext(string q) {
+            } catch (Exception e) {
+                this.serviceDown = true;
+                throw new ServiceEndpointDownException("Mongo Persist Service is Down", e);
+            }
 
+        }
+
+        PersistedMessage IPersist.PeekAndMarkNext(string q, PersistedMessageStatusOptions mark) {
+
+            Task<PersistedMessage> t = ((IPersist)this).PeekAndMarkNextAsync(q, mark);
+            t.Wait();
+            return t.Result;
+
+        }
+
+        async Task<PersistedMessage> IPersist.PeekAndMarkNextAsync(string q, PersistedMessageStatusOptions mark) {
+            CancellationTokenSource cts = new CancellationTokenSource();
+            return await ((IPersist)this).PeekAndMarkNextAsync(q, mark, cts.Token);
+        }
+
+        async Task<PersistedMessage> IPersist.PeekAndMarkNextAsync(string q, PersistedMessageStatusOptions mark, CancellationToken token) {
             if (this.serviceDown) {
                 throw new ServiceEndpointDownException("Mongo Persist Service is Down");
             }
@@ -379,7 +475,7 @@ namespace ShortBus.Default {
                 var sort = Builders<PersistedMessage>.Sort.Ascending(e => e.DateStamp).Ascending(e => e.Ordinal);
                 var options = new FindOneAndUpdateOptions<PersistedMessage>() { ReturnDocument = ReturnDocument.After, Sort = sort };
 
-                pop = collection.FindOneAndUpdate(qfilter, update, options);
+                pop = await collection.FindOneAndUpdateAsync(qfilter, update, options, token);
 
             } catch (Exception e) {
                 this.serviceDown = true;
@@ -387,32 +483,131 @@ namespace ShortBus.Default {
             }
 
             return pop;
-
         }
 
-        void IPersist.UnMarkAll() {
+        async Task<PersistedMessage> IPersist.MarkAsync(Guid id, PersistedMessageStatusOptions mark) {
+            CancellationTokenSource cts = new CancellationTokenSource();
+            return await ((IPersist)this).MarkAsync(id, mark, cts.Token);
+        }
+
+        PersistedMessage IPersist.Mark(Guid Id, PersistedMessageStatusOptions mark) {
+            Task<PersistedMessage> t = ((IPersist)this).MarkAsync(Id, mark);
+            t.Wait();
+            return t.Result;
+        }
+
+        async Task<PersistedMessage> IPersist.MarkAsync(Guid Id, PersistedMessageStatusOptions mark, CancellationToken token) {
             if (this.serviceDown) {
                 throw new ServiceEndpointDownException("Mongo Persist Service is Down");
             }
 
+            PersistedMessage pop = null;
             IMongoCollection<PersistedMessage> collection = this.GetCollection();
 
             try {
-                FilterDefinitionBuilder<PersistedMessage> fBuilder = Builders<PersistedMessage>.Filter;
+                var update = Builders<PersistedMessage>.Update.Set(g => g.Status, mark);
+                var filter = Builders<PersistedMessage>.Filter.Eq(m => m.Id, Id);
 
-                var qfilter = fBuilder.Eq(g => g.Status, PersistedMessageStatusOptions.Marked);
-                var update = Builders<PersistedMessage>.Update.Set(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess);
 
-                collection.UpdateMany(qfilter, update);
+                await collection.UpdateOneAsync(filter, update, null, token);
 
             } catch (Exception e) {
                 this.serviceDown = true;
                 throw new ServiceEndpointDownException("Mongo Persist Service is Down", e);
             }
 
+            return pop;
         }
 
-        void IPersist.CommitBatch(string transactionID) {
+        PersistedMessage IPersist.Pop(Guid Id) {
+            Task<PersistedMessage> t = ((IPersist)this).PopAsync(Id);
+            t.Wait();
+            return t.Result;
+
+        }
+
+        async Task<PersistedMessage> IPersist.PopAsync(Guid Id) {
+            CancellationTokenSource cts = new CancellationTokenSource();
+            return await ((IPersist)this).PopAsync(Id, cts.Token);
+        }
+
+        async Task<PersistedMessage> IPersist.PopAsync(Guid Id, CancellationToken token) {
+            if (this.serviceDown) {
+                throw new ServiceEndpointDownException("Mongo Persist Service is Down");
+            }
+
+            PersistedMessage pop = null;
+            IMongoCollection<PersistedMessage> collection = this.GetCollection();
+
+            try {
+                var filter = Builders<PersistedMessage>.Filter.Eq(m => m.Id, Id);
+
+
+                pop = await collection.FindOneAndDeleteAsync(filter, null, token);
+            } catch (Exception e) {
+                this.serviceDown = true;
+                throw new ServiceEndpointDownException("Mongo Persist Service is Down", e);
+            }
+
+            return pop;
+        }
+
+        PersistedMessage IPersist.Reschedule(Guid Id, TimeSpan fromNow) {
+            Task<PersistedMessage> t = ((IPersist)this).RescheduleAsync(Id, fromNow);
+            t.Wait();
+            return t.Result;
+
+        }
+
+        async Task<PersistedMessage> IPersist.RescheduleAsync(Guid id, TimeSpan fromNow) {
+            CancellationTokenSource cts = new CancellationTokenSource();
+            return await ((IPersist)this).RescheduleAsync(id, fromNow, cts.Token);
+        }
+
+        async Task<PersistedMessage> IPersist.RescheduleAsync(Guid Id, TimeSpan fromNow, CancellationToken token) {
+            if (this.serviceDown) {
+                throw new ServiceEndpointDownException("Mongo Persist Service is Down");
+            }
+
+            PersistedMessage pop = null;
+            IMongoCollection<PersistedMessage> collection = this.GetCollection();
+
+            try {
+                DateTime toSet = DateTime.UtcNow.Add(fromNow);
+                var update = Builders<PersistedMessage>.Update
+                    .Set(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess)
+                    .Set(g => g.DateStamp, toSet)
+                    .Inc(g => g.RetryCount, 1);
+
+
+
+                var filter = Builders<PersistedMessage>.Filter.Eq(m => m.Id, Id);
+
+
+                var r = await collection.UpdateOneAsync(filter, update, null, token);
+
+            } catch (Exception e) {
+                this.serviceDown = true;
+                throw new ServiceEndpointDownException("Mongo Persist Service is Down", e);
+            }
+
+            return pop;
+        }
+
+        bool IPersist.CommitBatch(string transactionID) {
+
+            Task<bool> t = ((IPersist)this).CommitBatchAsync(transactionID);
+            t.Wait();
+            return t.Result;
+
+        }
+
+        async Task<bool> IPersist.CommitBatchAsync(string transactionID) {
+            CancellationTokenSource cts = new CancellationTokenSource();
+            return await ((IPersist)this).CommitBatchAsync(transactionID, cts.Token);
+        }
+
+        async Task<bool> IPersist.CommitBatchAsync(string transactionID, CancellationToken token) {
             if (this.serviceDown) {
                 throw new ServiceEndpointDownException("Mongo Persist Service is Down");
             }
@@ -427,7 +622,9 @@ namespace ShortBus.Default {
                 var qfilter = fBuilder.And(fBuilder.Eq(g => g.Status, PersistedMessageStatusOptions.Uncommitted), fBuilder.Eq(g => g.TransactionID, transactionID));
                 var update = Builders<PersistedMessage>.Update.Set(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess);
 
-                collection.UpdateMany(qfilter, update);
+                await collection.UpdateManyAsync(qfilter, update, null, token);
+
+                return true;
 
             } catch (Exception e) {
                 this.serviceDown = true;
@@ -435,7 +632,53 @@ namespace ShortBus.Default {
             }
         }
 
-        void IPersist.UnMarkAll(string q) {
+        bool IPersist.ToggleMarkAll(PersistedMessageStatusOptions newMark, PersistedMessageStatusOptions oldMark) {
+            Task<bool> t = ((IPersist)this).ToggleMarkAllAsync(newMark, oldMark);
+            t.Wait();
+          
+            return t.Result;
+        }
+
+        async Task<bool> IPersist.ToggleMarkAllAsync(PersistedMessageStatusOptions newMark, PersistedMessageStatusOptions oldMark) {
+            CancellationTokenSource cts = new CancellationTokenSource();
+            return await ((IPersist)this).ToggleMarkAllAsync(newMark, oldMark, cts.Token);
+        }
+
+        async Task<bool> IPersist.ToggleMarkAllAsync(PersistedMessageStatusOptions newMark, PersistedMessageStatusOptions oldMark, CancellationToken token) {
+            if (this.serviceDown) {
+                throw new ServiceEndpointDownException("Mongo Persist Service is Down");
+            }
+
+            IMongoCollection<PersistedMessage> collection = this.GetCollection();
+
+            try {
+                FilterDefinitionBuilder<PersistedMessage> fBuilder = Builders<PersistedMessage>.Filter;
+
+                var qfilter = fBuilder.Eq(g => g.Status, oldMark);
+                var update = Builders<PersistedMessage>.Update.Set(g => g.Status, newMark);
+
+                await collection.UpdateManyAsync(qfilter, update, null, token);
+
+                return true;
+
+            } catch (Exception e) {
+                this.serviceDown = true;
+                throw new ServiceEndpointDownException("Mongo Persist Service is Down", e);
+            }
+        }
+
+        bool IPersist.ToggleMarkAll(string q, PersistedMessageStatusOptions newMark, PersistedMessageStatusOptions oldMark) {
+            Task<bool> t = ((IPersist)this).ToggleMarkAllAsync(q, newMark, oldMark);
+            t.Wait();
+            return t.Result;
+        }
+
+        async Task<bool> IPersist.ToggleMarkAllAsync(string q, PersistedMessageStatusOptions newMark, PersistedMessageStatusOptions oldMark) {
+            CancellationTokenSource cts = new CancellationTokenSource();
+            return await ((IPersist)this).ToggleMarkAllAsync(q, newMark, oldMark, cts.Token);
+        }
+
+        async Task<bool> IPersist.ToggleMarkAllAsync(string q, PersistedMessageStatusOptions newMark, PersistedMessageStatusOptions oldMark, CancellationToken token) {
             if (this.serviceDown) {
                 throw new ServiceEndpointDownException("Mongo Persist Service is Down");
             }
@@ -447,181 +690,17 @@ namespace ShortBus.Default {
             try {
                 FilterDefinitionBuilder<PersistedMessage> fBuilder = Builders<PersistedMessage>.Filter;
 
-                var qfilter = fBuilder.And(fBuilder.Eq(g => g.Status, PersistedMessageStatusOptions.Marked), fBuilder.Eq(g => g.Queue, q));
-                var update = Builders<PersistedMessage>.Update.Set(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess);
+                var qfilter = fBuilder.And(fBuilder.Eq(g => g.Status, oldMark), fBuilder.Eq(g => g.Queue, q));
+                var update = Builders<PersistedMessage>.Update.Set(g => g.Status, newMark);
 
-                collection.UpdateMany(qfilter, update);
+                await collection.UpdateManyAsync(qfilter, update, null, token);
 
-            } catch (Exception e) {
-                this.serviceDown = true;
-                throw new ServiceEndpointDownException("Mongo Persist Service is Down", e);
-            }
-
-        }
-
-
-        PersistedMessage IPersist.PeekNext(string q) {
-
-            if (this.serviceDown) {
-                throw new ServiceEndpointDownException("Mongo Persist Service is Down");
-            }
-
-            IMongoCollection<PersistedMessage> collection = this.GetCollection();
-            PersistedMessage pop = null;
-
-            try {
-                FilterDefinitionBuilder<PersistedMessage> fBuilder = Builders<PersistedMessage>.Filter;
-
-                var qfilter = fBuilder.And(fBuilder.Eq(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess), fBuilder.Eq(g => g.Queue, q), fBuilder.Lte(g => g.DateStamp, DateTime.UtcNow));
-                var sort = Builders<PersistedMessage>.Sort.Ascending(e => e.DateStamp).Ascending(e => e.Ordinal);
-                var options = new FindOptions<PersistedMessage>() { Sort = sort };
-
-                Task<IAsyncCursor<PersistedMessage>> t = collection.FindAsync(qfilter, options);
-                t.Wait();
-                IAsyncCursor<PersistedMessage> cursor = t.Result;
-                while (cursor.MoveNext()) {
-                    if (cursor.Current.Count() > 0) {
-                        pop = cursor.Current.FirstOrDefault();
-                    }
-                }
-                return pop;
-
+                return true;
 
             } catch (Exception e) {
                 this.serviceDown = true;
                 throw new ServiceEndpointDownException("Mongo Persist Service is Down", e);
             }
-
-            return pop;
-
-        }
-
-        PersistedMessage IPersist.Pop(Guid Id) {
-            if (this.serviceDown) {
-                throw new ServiceEndpointDownException("Mongo Persist Service is Down");
-            }
-
-            PersistedMessage pop = null;
-            IMongoCollection<PersistedMessage> collection = this.GetCollection();
-
-            try {
-                var filter = Builders<PersistedMessage>.Filter.Eq(m => m.Id, Id);
-
-                
-                pop = collection.FindOneAndDelete(filter);
-            } catch (Exception e) {
-                this.serviceDown = true;
-                throw new ServiceEndpointDownException("Mongo Persist Service is Down", e);
-            }
-
-            return pop;
-
-        }
-
-        PersistedMessage IPersist.Mark(Guid Id, PersistedMessageStatusOptions mark) {
-            if (this.serviceDown) {
-                throw new ServiceEndpointDownException("Mongo Persist Service is Down");
-            }
-
-            PersistedMessage pop = null;
-            IMongoCollection<PersistedMessage> collection = this.GetCollection();
-
-            try {
-                var update = Builders<PersistedMessage>.Update.Set(g => g.Status, mark);
-                var filter = Builders<PersistedMessage>.Filter.Eq(m => m.Id, Id);
-
-
-                collection.UpdateOne(filter, update);
-
-            } catch (Exception e) {
-                this.serviceDown = true;
-                throw new ServiceEndpointDownException("Mongo Persist Service is Down", e);
-            }
-
-            return pop;
-
-        }
-
-        PersistedMessage IPersist.Processing(Guid Id) {
-            if (this.serviceDown) {
-                throw new ServiceEndpointDownException("Mongo Persist Service is Down");
-            }
-
-            PersistedMessage pop = null;
-            IMongoCollection<PersistedMessage> collection = this.GetCollection();
-
-            try {
-                var update = Builders<PersistedMessage>.Update.Set(g => g.Status, PersistedMessageStatusOptions.Processing);
-                var filter = Builders<PersistedMessage>.Filter.Eq(m => m.Id, Id);
-
-
-                collection.UpdateOne(filter, update);
-
-            } catch (Exception e) {
-                this.serviceDown = true;
-                throw new ServiceEndpointDownException("Mongo Persist Service is Down", e);
-            }
-
-            return pop;
-
-        }
-
-        PersistedMessage IPersist.Reschedule(Guid Id, TimeSpan fromnNow) {
-            if (this.serviceDown) {
-                throw new ServiceEndpointDownException("Mongo Persist Service is Down");
-            }
-
-            PersistedMessage pop = null;
-            IMongoCollection<PersistedMessage> collection = this.GetCollection();
-
-            try {
-                DateTime toSet = DateTime.UtcNow.Add(fromnNow);
-                var update = Builders<PersistedMessage>.Update
-                    .Set(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess)
-                    .Set(g => g.DateStamp, toSet)
-                    .Inc(g => g.RetryCount, 1);
-
-
-
-                var filter = Builders<PersistedMessage>.Filter.Eq(m => m.Id, Id);
-
-
-                var r = collection.UpdateOne(filter, update);
-
-            } catch (Exception e) {
-                this.serviceDown = true;
-                throw new ServiceEndpointDownException("Mongo Persist Service is Down", e);
-            }
-
-            return pop;
-
-        }
-
-        bool IPersist.ServiceIsDown() {
-            return this.serviceDown;
-        }
-
-        bool IPersist.ResetConnection() {
-            this.serviceDown = false;
-
-
-            dbInstance = null;
-        
-
-
-            try {
-
-
-                ((IPersist)this).Persist(new PersistedMessage[] { new PersistedMessage("Test") { Queue = "diag_test" , DateStamp = DateTime.UtcNow } });
-                PersistedMessage peeked = ((IPersist)this).PeekAndMarkNext("diag_test");
-                PersistedMessage popped = ((IPersist)this).Pop(peeked.Id);
-
-            } catch (Exception) {
-                this.serviceDown = true;
-
-            }
-            return this.serviceDown;
-
         }
     }
     

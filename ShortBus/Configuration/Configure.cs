@@ -11,6 +11,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace ShortBus.Configuration {
@@ -202,7 +203,17 @@ namespace ShortBus.Configuration {
             //should have messages
          
             if (this.Persitor == null) {
-                this.Persitor = this.storageProvider.CreatePersist(this);
+
+                try {
+                    CancellationTokenSource cts = new CancellationTokenSource();
+                    Task<IPersist> t = this.storageProvider.CreatePersistAsync(this, cts.Token);
+                   
+                    t.Wait();
+                    this.Persitor = t.Result;
+
+                } catch { throw; }
+
+              
             }
 
             bool hasEndpoints = ((this.EndPoints != null) && this.EndPoints.Count() > 0);
