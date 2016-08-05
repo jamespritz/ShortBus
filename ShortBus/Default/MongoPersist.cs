@@ -423,7 +423,8 @@ namespace ShortBus.Default {
             try {
                 FilterDefinitionBuilder<PersistedMessage> fBuilder = Builders<PersistedMessage>.Filter;
 
-                var qfilter = fBuilder.And(fBuilder.Eq(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess), fBuilder.Eq(g => g.Queue, q), fBuilder.Lte(g => g.DateStamp, DateTime.UtcNow));
+                //var qfilter = fBuilder.And(fBuilder.Eq(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess), fBuilder.Eq(g => g.Queue, q), fBuilder.Lte(g => g.DateStamp, DateTime.UtcNow));
+                var qfilter = fBuilder.And(fBuilder.Eq(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess), fBuilder.Eq(g => g.Queue, q));
                 var sort = Builders<PersistedMessage>.Sort.Ascending(e => e.DateStamp).Ascending(e => e.Ordinal);
                 var options = new FindOptions<PersistedMessage>() { Sort = sort };
 
@@ -584,7 +585,9 @@ namespace ShortBus.Default {
                 var filter = Builders<PersistedMessage>.Filter.Eq(m => m.Id, Id);
 
 
-                var r = await collection.UpdateOneAsync(filter, update, null, token);
+                pop = await collection.FindOneAndUpdateAsync(filter, update, null, token);
+                
+                
 
             } catch (Exception e) {
                 this.serviceDown = true;

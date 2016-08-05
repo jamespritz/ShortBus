@@ -122,6 +122,13 @@ namespace ShortBus {
         struct pubStat {
             public bool Has { get; set; }
             public bool Processing { get; set; }
+
+            //null is unknown (we need to check)
+            //o/w true or false
+            public bool? HasReschedules { get; set; }
+            
+            public DateTime? NextDue { get; set; }
+
         }
 
 
@@ -201,8 +208,8 @@ namespace ShortBus {
                     var activeEndpoints = from r in configure.Routes group r by r.EndPointName into grouped
                                           select new { EP = grouped.Key };
                     activeEndpoints.ToList().ForEach(g => {
-                        endPointsRunning.AddOrUpdate(g.EP, new pubStat() { Has = true, Processing = false }
-                        , (r, z) => { return new pubStat() { Has = true, Processing = false }; });
+                        endPointsRunning.AddOrUpdate(g.EP, new pubStat() { Has = true, Processing = false, HasReschedules = null, NextDue = null }
+                        , (r, z) => { return new pubStat() { Has = true, Processing = false, HasReschedules = null, NextDue = null }; });
 
                     });
 
@@ -211,14 +218,14 @@ namespace ShortBus {
                     
                 }
                 IMessageRouter router =  (IMessageRouter)configure.EndPoints[request.Name];
-                if (router.ServiceIsDown()) {
-                    router.ResetConnection(request.EndPoint);
-                    configure.Persitor.ToggleMarkAll(request.Name, PersistedMessageStatusOptions.ReadyToProcess, PersistedMessageStatusOptions.Marked);
-                    endPointsRunning.AddOrUpdate(request.Name, new pubStat() { Has = true, Processing = false }, (c, z) => { return new pubStat() { Has = true, Processing = false }; });
+      
+                router.ResetConnection(request.EndPoint);
+                configure.Persitor.ToggleMarkAll(request.Name, PersistedMessageStatusOptions.ReadyToProcess, PersistedMessageStatusOptions.Marked);
+                endPointsRunning.AddOrUpdate(request.Name, new pubStat() { Has = true, Processing = false, NextDue = null, HasReschedules = null }, (c, z) => { return new pubStat() { Has = true, Processing = false, HasReschedules = null, NextDue= null }; });
 
-                }
 
-                StartProcessing();
+                StartIn(5000);
+
                 return HandlerResponse.Handled();
             }
 
@@ -320,9 +327,7 @@ namespace ShortBus {
                 } else { //if we are stopping the bus, don't restart the threads... that would be silly!
 
                     //otherwise, start the restart timer 
-                    if (restartTimer != null) {
-                        restartTimer.Start();
-                    }
+                    StartIn(1000);
 
                 }
             }
@@ -486,7 +491,7 @@ namespace ShortBus {
 
                 configure.EndPoints.ToList().ForEach(k => {
 
-                    endPointsRunning.AddOrUpdate(k.Key, new pubStat() { Has = true, Processing = false }, (c, z) => { return new pubStat() { Has = true, Processing = false }; });
+                    endPointsRunning.AddOrUpdate(k.Key, new pubStat() { Has = true, Processing = false }, (c, z) => { return new pubStat() { Has = true, Processing = false, HasReschedules = null, NextDue = null }; });
 
                 });
 
@@ -495,17 +500,22 @@ namespace ShortBus {
 
                 configure.Persitor.ToggleMarkAll(PersistedMessageStatusOptions.ReadyToProcess, PersistedMessageStatusOptions.Marked);
 
-                restartTimer = new System.Timers.Timer();
-                restartTimer.Interval = 1000;
-                restartTimer.Enabled = true;
-                restartTimer.AutoReset = false;
-                restartTimer.Elapsed += Restart;
+                StartIn(1000);
+
             } catch (Exception e) {
                 throw new ServiceEndpointDownException("Bus Persistor is Down");
 
             }
         }
 
+        private static void StartIn(int milliSeconds) {
+            restartTimer = new System.Timers.Timer();
+            restartTimer.Interval = milliSeconds;
+            restartTimer.Enabled = true;
+            restartTimer.AutoReset = false;
+            restartTimer.Elapsed += Restart;
+            restartTimer.Start();
+        }
         private static void Restart(object sender, System.Timers.ElapsedEventArgs e) {
             StartProcessing();
         }
@@ -614,10 +624,10 @@ namespace ShortBus {
                     IEnumerable<MessageTypeMapping> pubs = routes;
 
                     foreach (MessageTypeMapping m in pubs) {
-                        endPointsRunning.AddOrUpdate(m.EndPointName, new pubStat() { Has = true, Processing = false }, (k, v) => {
+                        endPointsRunning.AddOrUpdate(m.EndPointName, new pubStat() { Has = true, Processing = false, HasReschedules = null, NextDue = null }, (k, v) => {
 
                             if (!v.Processing) {
-                                return new pubStat() { Has = true, Processing = false };
+                                return new pubStat() { Has = true, Processing = false, NextDue = null, HasReschedules = null };
                             } else {
                                 return v;
                             }
@@ -690,10 +700,10 @@ namespace ShortBus {
                 }
 
                 foreach (string n in endPointsToTrigger) {
-                    endPointsRunning.AddOrUpdate(n, new pubStat() { Has = true, Processing = false }, (k, v) => {
+                    endPointsRunning.AddOrUpdate(n, new pubStat() { Has = true, Processing = false, HasReschedules = null, NextDue = null }, (k, v) => {
 
                         if (!v.Processing) {
-                            return new pubStat() { Has = true, Processing = false };
+                            return new pubStat() { Has = true, Processing = false, NextDue = null, HasReschedules = null };
                         } else {
                             return v;
                         }
@@ -802,6 +812,20 @@ namespace ShortBus {
                                                 if (response.HandlerResponse.Status == HandlerStatusOptions.Reschedule) {
                                                     var popped = configure.Persitor.Reschedule(msg.Id, response.HandlerResponse.RescheduleIncrement);
 
+                                                    pubStat stat = endPointsRunning[q];
+                                                    endPointsRunning.AddOrUpdate(q, new pubStat() { Has = true, Processing = false, HasReschedules = true, NextDue = popped.DateStamp }, 
+                                                        (k, v) => {
+                                                            pubStat toReturn = new pubStat();
+
+                                                            if (!v.HasReschedules.GetValueOrDefault(false)) {
+                                                                toReturn = new pubStat() { Has = true, HasReschedules = true, NextDue = popped.DateStamp, Processing = false };
+                                                            } else {
+                                                                toReturn = new pubStat() { Has = true, HasReschedules = true, Processing = false, NextDue = (v.NextDue < popped.DateStamp ? v.NextDue : popped.DateStamp) };
+                                                            }
+
+                                                            return toReturn;      
+                                                    });
+
                                                 } else {
                                                     var popped = configure.Persitor.Mark(msg.Id, PersistedMessageStatusOptions.Exception);
                                                 }
@@ -812,7 +836,7 @@ namespace ShortBus {
                                         }
 
                                         endPointsRunning.AddOrUpdate(q, new pubStat() { Has = true, Processing = false }, (k, v) => {
-                                            return new pubStat() { Has = true, Processing = false };
+                                            return new pubStat() { Has = true, Processing = false, HasReschedules = v.HasReschedules, NextDue = v.NextDue };
                                         });
 
                                     } catch (Exception) {
@@ -826,7 +850,7 @@ namespace ShortBus {
                                 //if we didn't find a message, stop processing that q until another comes in
 
                                 endPointsRunning.AddOrUpdate(q, new pubStat() { Has = false, Processing = false }, (k, v) => {
-                                    return new pubStat() { Has = false, Processing = false };
+                                    return new pubStat() { Has = false, Processing = false, HasReschedules = v.HasReschedules, NextDue = v.NextDue };
                                 });
 
                                 YieldNextThread();
@@ -906,13 +930,49 @@ namespace ShortBus {
                             forceHandle = handler.Parallel;
                         }
 
-                        if (stat.Has && (!stat.Processing || forceHandle)) {
-                            toReturn = q;
-                            endPointsRunning.AddOrUpdate(q, new pubStat() { Has = true, Processing = true }, (k, v) => {
-                                return new pubStat() { Has = true, Processing = true };
-                            });
-                            currentEndpoint = next;
-                            break;
+                        if (stat.Has) {
+                            if (!stat.Processing || forceHandle) {
+                                toReturn = q;
+                                endPointsRunning.AddOrUpdate(q, new pubStat() { Has = true, Processing = true }, (k, v) => {
+                                    return new pubStat() { Has = true, Processing = true };
+                                });
+                                currentEndpoint = next;
+                                break;
+                            }
+                        } else {
+                            //if endpoint has known upcoming reschedules, look to see if any are due
+                            if (!stat.HasReschedules.HasValue) { //if null, then we don't know, so we have to check
+                                var msg = configure.Persitor.PeekNext(q);
+                                if (msg != null) {
+                                    if (msg.DateStamp <= DateTime.UtcNow) {
+                                        //we have a message to process...
+                                        toReturn = q;
+                                        endPointsRunning.AddOrUpdate(q, new pubStat() { Has = true, Processing = true, NextDue = null, HasReschedules = null }, (k, v) => {
+                                            return new pubStat() { Has = true, Processing = true, NextDue = null, HasReschedules = null };
+                                        });
+                                        currentEndpoint = next;
+                                        break;
+                                    } else {
+                                        //msg is due in future, schedule it
+                                        endPointsRunning.AddOrUpdate(q, new pubStat() { Has = false, Processing = false, NextDue = msg.DateStamp, HasReschedules = true }, (k, v) => {
+                                            return new pubStat() { Has = v.Has, Processing = false, NextDue = msg.DateStamp, HasReschedules = true };
+                                        });
+                                    }
+                                } else {
+                                    endPointsRunning.AddOrUpdate(q, new pubStat() { Has = false, Processing = false, NextDue = null, HasReschedules = false }, (k, v) => {
+                                        return new pubStat() { Has = v.Has, Processing = false, NextDue = null, HasReschedules = false };
+                                    });
+                                }
+                            } else if (stat.HasReschedules.GetValueOrDefault(false)) {
+                                if (stat.NextDue <= DateTime.UtcNow) {
+                                    toReturn = q;
+                                    endPointsRunning.AddOrUpdate(q, new pubStat() { Has = true, Processing = true, NextDue = null, HasReschedules = null }, (k, v) => {
+                                        return new pubStat() { Has = true, Processing = true, NextDue = null, HasReschedules = null };
+                                    });
+                                    currentEndpoint = next;
+                                    break;
+                                }
+                            }
                         }
                         next++;
                     }
