@@ -224,7 +224,7 @@ namespace ShortBus {
                 endPointsRunning.AddOrUpdate(request.Name, new pubStat() { Has = true, Processing = false, NextDue = null, HasReschedules = null }, (c, z) => { return new pubStat() { Has = true, Processing = false, HasReschedules = null, NextDue= null }; });
 
 
-                StartIn(5000);
+                StartIn(5000, new string[] { request.Name }, true);
 
                 return HandlerResponse.Handled();
             }
@@ -262,6 +262,7 @@ namespace ShortBus {
         private static bool stopping = false;
         private static ManualResetEvent allStopped = new ManualResetEvent(true);
 
+        private static bool restartPending = false;
 
         private static AutoResetEvent resetEvent = new AutoResetEvent(false);
         private static List<Task> taskThreads = null;
@@ -327,7 +328,7 @@ namespace ShortBus {
                 } else { //if we are stopping the bus, don't restart the threads... that would be silly!
 
                     //otherwise, start the restart timer 
-                    StartIn(1000);
+                    StartIn(1000, null, false);
 
                 }
             }
@@ -489,18 +490,14 @@ namespace ShortBus {
                     router.Publish(msg);
                 }
 
-                configure.EndPoints.ToList().ForEach(k => {
 
-                    endPointsRunning.AddOrUpdate(k.Key, new pubStat() { Has = true, Processing = false }, (c, z) => { return new pubStat() { Has = true, Processing = false, HasReschedules = null, NextDue = null }; });
-
-                });
 
                 // TODO: Ping Endpoints
                 //PingEndPoints();
 
                 configure.Persitor.ToggleMarkAll(PersistedMessageStatusOptions.ReadyToProcess, PersistedMessageStatusOptions.Marked);
 
-                StartIn(1000);
+                StartIn(1000, null, false);
 
             } catch (Exception e) {
                 throw new ServiceEndpointDownException("Bus Persistor is Down");
@@ -508,15 +505,45 @@ namespace ShortBus {
             }
         }
 
-        private static void StartIn(int milliSeconds) {
-            restartTimer = new System.Timers.Timer();
-            restartTimer.Interval = milliSeconds;
-            restartTimer.Enabled = true;
-            restartTimer.AutoReset = false;
-            restartTimer.Elapsed += Restart;
-            restartTimer.Start();
+        private static void StartIn(int milliSeconds, string[] seedQueues, bool cancelTimer) {
+
+
+
+            if (seedQueues == null || seedQueues.Length == 0) {
+                seedQueues = (from q in configure.EndPoints select q.Key).ToArray();
+            }
+
+
+
+            seedQueues.ToList().ForEach(q => {
+
+                endPointsRunning.AddOrUpdate(q, 
+                    new pubStat() { Has = true, Processing = false, HasReschedules = null, NextDue = null }, 
+                    (c, z) => { return new pubStat() { Has = true, Processing = z.Processing, HasReschedules = z.HasReschedules, NextDue = z.NextDue }; });
+
+            });
+
+
+            if (!restartPending || cancelTimer) {
+
+                if (milliSeconds > 0) {
+
+                    restartTimer = new System.Timers.Timer();
+                    restartTimer.Interval = milliSeconds;
+                    restartTimer.Enabled = true;
+                    restartTimer.AutoReset = false;
+                    restartTimer.Elapsed += Restart;
+                    restartPending = true;
+                } else {
+                    StartProcessing();
+                }
+            }
+
+
+
         }
         private static void Restart(object sender, System.Timers.ElapsedEventArgs e) {
+            restartPending = false;
             StartProcessing();
         }
 
@@ -623,18 +650,7 @@ namespace ShortBus {
                 Action whenDone = new Action(() => {
                     IEnumerable<MessageTypeMapping> pubs = routes;
 
-                    foreach (MessageTypeMapping m in pubs) {
-                        endPointsRunning.AddOrUpdate(m.EndPointName, new pubStat() { Has = true, Processing = false, HasReschedules = null, NextDue = null }, (k, v) => {
-
-                            if (!v.Processing) {
-                                return new pubStat() { Has = true, Processing = false, NextDue = null, HasReschedules = null };
-                            } else {
-                                return v;
-                            }
-                        });
-                    }
-
-                    StartProcessing();
+                    StartIn(0, (from m in pubs select m.EndPointName).ToArray(), false);
 
                 });
 
@@ -661,13 +677,13 @@ namespace ShortBus {
                 throw new BusNotRunningException("Bus has been stopped and cannot accept any new messages");
             }
 
+
+            List<string> endPointsToTrigger = new List<string>();
             try {
                 int id = SyncGetPadding();
 
                 var routes = configure.Routes.Where(g => g.TypeName.Equals(message.MessageType, StringComparison.OrdinalIgnoreCase) && g.Direction == MessageDirectionOptions.Outbound);
                 List<PersistedMessage> messages = new List<PersistedMessage>();
-
-                List<string> endPointsToTrigger = new List<string>();
 
                 //persist a copy of the message for each endpoint
                 foreach (MessageTypeMapping m in routes) {
@@ -699,23 +715,15 @@ namespace ShortBus {
 
                 }
 
-                foreach (string n in endPointsToTrigger) {
-                    endPointsRunning.AddOrUpdate(n, new pubStat() { Has = true, Processing = false, HasReschedules = null, NextDue = null }, (k, v) => {
 
-                        if (!v.Processing) {
-                            return new pubStat() { Has = true, Processing = false, NextDue = null, HasReschedules = null };
-                        } else {
-                            return v;
-                        }
-                    });
-                }
-
+                StartIn(0, endPointsToTrigger.ToArray(), false);
 
             } catch {
                 throw;
             }
 
-            StartProcessing();
+            
+
 
         }
 
