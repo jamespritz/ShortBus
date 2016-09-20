@@ -7,13 +7,20 @@ using System.Threading.Tasks;
 
 namespace ShortBus.Persistence {
 
+    public class BusMessage {
+        public string PayLoad { get; set; }
+        public string MessageType { get; set; }
+        public Dictionary<string, string> Headers = new Dictionary<string, string>();
+
+    }
     
     public enum PersistedMessageStatusOptions {
         Uncommitted = -1,
         ReadyToProcess = 0,
         Marked = 1,
         Processing = 2,
-        Exception = 3
+        Exception = 3,
+        MarkedInProcess = 4
     }
 
     //handler, type, date, retrycount
@@ -24,7 +31,7 @@ namespace ShortBus.Persistence {
 
     }
 
-    public class PersistedMessage {
+    public class PersistedMessage: BusMessage {
 
         
         public PersistedMessage() {
@@ -49,14 +56,12 @@ namespace ShortBus.Persistence {
 
         public DateTime DateStamp { get; set; }
 
-        public string PayLoad { get;set; }
-        public Dictionary<string,string> Headers = new Dictionary<string, string>();
 
         public List<Route> Routes { get; set; }
 
         public int Ordinal { get; set; }
         public string TransactionID { get; set; }
-        public string MessageType { get;set; }
+
 
         /// <summary>
         /// null = new message

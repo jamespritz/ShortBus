@@ -119,6 +119,8 @@ namespace ShortBus.Default {
         public virtual async Task<IMongoCollection<PersistedMessage>> CreateIndexesAsync(IMongoCollection<PersistedMessage> collection, CancellationToken token) {
             var keys = Builders<PersistedMessage>.IndexKeys;
 
+            
+
             var idxOrdinal = keys.Ascending(g => g.Ordinal);
             var idxSend = keys.Ascending(g => g.DateStamp);
             CreateIndexModel<PersistedMessage> idxModelOrdinal = new CreateIndexModel<PersistedMessage>(idxOrdinal);
@@ -353,6 +355,7 @@ namespace ShortBus.Default {
             IMongoCollection<PersistedMessage> collection = this.GetCollection();
 
             try {
+                token.ThrowIfCancellationRequested();
                 foreach (PersistedMessage m in messages) {
                     m.DateStamp = DateTime.UtcNow;
                 }
@@ -421,6 +424,7 @@ namespace ShortBus.Default {
             PersistedMessage pop = null;
 
             try {
+                token.ThrowIfCancellationRequested();
                 FilterDefinitionBuilder<PersistedMessage> fBuilder = Builders<PersistedMessage>.Filter;
 
                 //var qfilter = fBuilder.And(fBuilder.Eq(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess), fBuilder.Eq(g => g.Queue, q), fBuilder.Lte(g => g.DateStamp, DateTime.UtcNow));
@@ -469,10 +473,11 @@ namespace ShortBus.Default {
             PersistedMessage pop = null;
 
             try {
+                token.ThrowIfCancellationRequested();
                 FilterDefinitionBuilder<PersistedMessage> fBuilder = Builders<PersistedMessage>.Filter;
 
                 var qfilter = fBuilder.And(fBuilder.Eq(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess), fBuilder.Eq(g => g.Queue, q), fBuilder.Lte(g => g.DateStamp, DateTime.UtcNow));
-                var update = Builders<PersistedMessage>.Update.Set(g => g.Status, PersistedMessageStatusOptions.Marked);
+                var update = Builders<PersistedMessage>.Update.Set(g => g.Status, mark);
                 var sort = Builders<PersistedMessage>.Sort.Ascending(e => e.DateStamp).Ascending(e => e.Ordinal);
                 var options = new FindOneAndUpdateOptions<PersistedMessage>() { ReturnDocument = ReturnDocument.After, Sort = sort };
 
@@ -485,6 +490,48 @@ namespace ShortBus.Default {
 
             return pop;
         }
+
+        PersistedMessage IPersist.PeekAndMark(string q, PersistedMessageStatusOptions mark, Guid messageId) {
+
+            Task<PersistedMessage> t = ((IPersist)this).PeekAndMarkAsync(q, mark, messageId);
+            t.Wait();
+            return t.Result;
+
+        }
+
+        async Task<PersistedMessage> IPersist.PeekAndMarkAsync(string q, PersistedMessageStatusOptions mark, Guid messageId) {
+            CancellationTokenSource cts = new CancellationTokenSource();
+            return await ((IPersist)this).PeekAndMarkAsync(q, mark, cts.Token, messageId);
+        }
+
+        async Task<PersistedMessage> IPersist.PeekAndMarkAsync(string q, PersistedMessageStatusOptions mark, CancellationToken token, Guid messageId) {
+            if (this.serviceDown) {
+                throw new ServiceEndpointDownException("Mongo Persist Service is Down");
+            }
+
+            IMongoCollection<PersistedMessage> collection = this.GetCollection();
+            PersistedMessage pop = null;
+
+            try {
+                token.ThrowIfCancellationRequested();
+                FilterDefinitionBuilder<PersistedMessage> fBuilder = Builders<PersistedMessage>.Filter;
+
+                //var qfilter = fBuilder.And(fBuilder.Eq(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess), fBuilder.Eq(g => g.Queue, q), fBuilder.Lte(g => g.DateStamp, DateTime.UtcNow));
+                var qfilter = fBuilder.Eq(g => g.Id, messageId);
+                var update = Builders<PersistedMessage>.Update.Set(g => g.Status, mark);
+                //var sort = Builders<PersistedMessage>.Sort.Ascending(e => e.DateStamp).Ascending(e => e.Ordinal);
+                var options = new FindOneAndUpdateOptions<PersistedMessage>() { ReturnDocument = ReturnDocument.After };
+
+                pop = await collection.FindOneAndUpdateAsync(qfilter, update, options, token);
+
+            } catch (Exception e) {
+                this.serviceDown = true;
+                throw new ServiceEndpointDownException("Mongo Persist Service is Down", e);
+            }
+
+            return pop;
+        }
+
 
         async Task<PersistedMessage> IPersist.MarkAsync(Guid id, PersistedMessageStatusOptions mark) {
             CancellationTokenSource cts = new CancellationTokenSource();
@@ -506,6 +553,7 @@ namespace ShortBus.Default {
             IMongoCollection<PersistedMessage> collection = this.GetCollection();
 
             try {
+                token.ThrowIfCancellationRequested();
                 var update = Builders<PersistedMessage>.Update.Set(g => g.Status, mark);
                 var filter = Builders<PersistedMessage>.Filter.Eq(m => m.Id, Id);
 
@@ -541,6 +589,7 @@ namespace ShortBus.Default {
             IMongoCollection<PersistedMessage> collection = this.GetCollection();
 
             try {
+                token.ThrowIfCancellationRequested();
                 var filter = Builders<PersistedMessage>.Filter.Eq(m => m.Id, Id);
 
 
@@ -574,6 +623,7 @@ namespace ShortBus.Default {
             IMongoCollection<PersistedMessage> collection = this.GetCollection();
 
             try {
+                token.ThrowIfCancellationRequested();
                 DateTime toSet = DateTime.UtcNow.Add(fromNow);
                 var update = Builders<PersistedMessage>.Update
                     .Set(g => g.Status, PersistedMessageStatusOptions.ReadyToProcess)
@@ -620,6 +670,8 @@ namespace ShortBus.Default {
 
 
             try {
+                token.ThrowIfCancellationRequested();
+                
                 FilterDefinitionBuilder<PersistedMessage> fBuilder = Builders<PersistedMessage>.Filter;
 
                 var qfilter = fBuilder.And(fBuilder.Eq(g => g.Status, PersistedMessageStatusOptions.Uncommitted), fBuilder.Eq(g => g.TransactionID, transactionID));
@@ -655,6 +707,7 @@ namespace ShortBus.Default {
             IMongoCollection<PersistedMessage> collection = this.GetCollection();
 
             try {
+                token.ThrowIfCancellationRequested();
                 FilterDefinitionBuilder<PersistedMessage> fBuilder = Builders<PersistedMessage>.Filter;
 
                 var qfilter = fBuilder.Eq(g => g.Status, oldMark);
@@ -691,6 +744,7 @@ namespace ShortBus.Default {
 
 
             try {
+                token.ThrowIfCancellationRequested();
                 FilterDefinitionBuilder<PersistedMessage> fBuilder = Builders<PersistedMessage>.Filter;
 
                 var qfilter = fBuilder.And(fBuilder.Eq(g => g.Status, oldMark), fBuilder.Eq(g => g.Queue, q));

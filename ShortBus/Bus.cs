@@ -26,7 +26,7 @@ namespace ShortBus {
         private string txId = string.Empty;
         private Action whenDone = null;
 
-        public string SendMessage(IEnumerable<PersistedMessage> messages, IPersist persistor, Action whenDone) {
+        public string PersistMessage(IEnumerable<PersistedMessage> messages, IPersist persistor, Action whenDone) {
 
             string txId = string.Empty;
             Transaction currentTx = Transaction.Current;
@@ -159,7 +159,7 @@ namespace ShortBus {
 
                 //check if we know about the endpoint
                 if (stored.EndPoints.Count(g => g.Name.Equals(request.Name, StringComparison.OrdinalIgnoreCase)) == 0) {
-                    stored.EndPoints.Add(new EndPoint() { Name = request.Name, EndPointAddress = request.EndPoint, EndPointType = request.EndPointType });
+                    stored.EndPoints.Add(new ShortBus.Configuration.EndPoint() { Name = request.Name, EndPointAddress = request.EndPoint, EndPointType = request.EndPointType });
                     changed = true;
                 }
 
@@ -285,7 +285,7 @@ namespace ShortBus {
                         ApplicationGUID = ((IConfigure)configure).ApplicationGUID
                         , ApplicationName = ((IConfigure)configure).ApplicationName
                         , Version = "1.0"
-                        , EndPoints = new List<EndPoint>()
+                        , EndPoints = new List<ShortBus.Configuration.EndPoint>()
                         , Subscriptions = new List<MessageTypeMapping>()
                     };
                     config.UpdateConfig(stored);
@@ -294,7 +294,7 @@ namespace ShortBus {
    
 
 
-                foreach (EndPoint s in stored.Subscribers()) {
+                foreach (ShortBus.Configuration.EndPoint s in stored.Subscribers()) {
                     ((IConfigure)configure).RegisterEndpoint(s.Name, new RESTEndPoint(new RESTSettings(s.EndPointAddress, s.EndPointType )));
 
                 }
@@ -320,16 +320,22 @@ namespace ShortBus {
 
         private static void Stall(int threadId) {
 
-            
+
             if (AllThreadsAreStopped()) {
-                
+
                 if (stopping) {
                     allStopped.Set();
                 } else { //if we are stopping the bus, don't restart the threads... that would be silly!
 
-                    //otherwise, start the restart timer 
-                    StartIn(1000, null, false);
 
+                    // TODO: don't allow new mesages until i'm done processing backed-up messages (if i use an agent)
+
+
+                    bool dontRestart = configure.IHaveAnAgent;
+                    if (!dontRestart) {
+                        //otherwise, start the restart timer 
+                        StartIn(1000, null, false);
+                    }
                 }
             }
 
@@ -524,6 +530,8 @@ namespace ShortBus {
             });
 
 
+
+        
             if (!restartPending || cancelTimer) {
 
                 if (milliSeconds > 0) {
@@ -549,6 +557,7 @@ namespace ShortBus {
 
         private static void StartProcessing() {
 
+            CTS = new CancellationTokenSource();
             for (int i = 1; i <= maxThreads; i++) {
 
                 Task t = taskThreads[i - 1];
@@ -593,6 +602,92 @@ namespace ShortBus {
 
         }
 
+        ///// <summary>
+        ///// Sends message directly to mapped endpoints
+        ///// </summary>
+        ///// <typeparam name="T"></typeparam>
+        ///// <param name="Message"></param>
+        ///// <returns></returns>
+        //public static string SendMessageDirect<T>(T message) {
+
+        //    if (stopped || stopping) {
+        //        throw new BusNotRunningException("Bus has been stopped and cannot accept any new messages");
+        //    }
+
+        //    //serialize message
+        //    string serialized = JsonConvert.SerializeObject(message, new JsonSerializerSettings() { TypeNameHandling = TypeNameHandling.All });
+
+
+        //    //create peristed message
+        //    PersistedMessage msg = new PersistedMessage(serialized) { DateStamp = DateTime.UtcNow };
+
+        //    JObject asJO = JObject.Parse(serialized);
+        //    msg.MessageType = asJO["$type"].ToString();
+
+        //    string transactionId = msg.TransactionID;
+
+        //    //persist message to local storage
+        //    try {
+
+        //        int id = SyncGetPadding();
+
+        //        var routes = configure.Routes.Where(g => g.TypeName.Equals(msg.MessageType, StringComparison.OrdinalIgnoreCase));
+        //        List<PersistedMessage> messages = new List<PersistedMessage>();
+
+                
+
+        //        foreach (MessageTypeMapping m in routes) {
+
+        //            IEndPoint endPoint = configure.EndPoints.FirstOrDefault(g => g.Key == m.EndPointName).Value;
+
+        //            PersistedMessage copied = new PersistedMessage() {
+        //                PayLoad = msg.PayLoad
+        //                , Headers = msg.Headers
+        //                , MessageType = msg.MessageType
+        //                , Status = PersistedMessageStatusOptions.ReadyToProcess
+        //                , Ordinal = id
+        //                , DateStamp = DateTime.UtcNow
+        //                , TransactionID = msg.TransactionID
+        //                , Queue = m.EndPointName
+        //            };
+        //            copied.Routes.Add(new Route() {
+        //                EndPointName = m.EndPointName
+        //                , EndPointType = endPoint.EndPointType
+        //                , Routed = DateTime.UtcNow
+        //            });
+
+                    
+        //            IMessageRouter asRouter = (IMessageRouter)endPoint;
+        //            if (asRouter.ServiceIsDown()) {
+        //                if (!m.DiscardIfDown) {
+        //                    throw new ShortBus.ServiceEndpointDownException(string.Format("{0} is down", m.EndPointName));
+        //                }
+        //            } else {
+        //            //send message directly to endpoint
+        //                try {
+        //                    ((IMessageRouter)endPoint).Publish(msg);
+        //                } catch (Exception e) {
+        //                    if (!m.DiscardIfDown) {
+        //                        throw e;
+        //                    }
+        //                }
+        //            }
+
+                    
+        //        }
+
+
+
+
+        //        return transactionId;
+
+
+        //    } catch (Exception) {
+        //        throw;
+        //    }
+
+
+        //}
 
         public static string SendMessage<T>(T message) {
 
@@ -621,15 +716,19 @@ namespace ShortBus {
                 var routes = configure.Routes.Where(g => g.TypeName.Equals(msg.MessageType, StringComparison.OrdinalIgnoreCase));
                 List<PersistedMessage> messages = new List<PersistedMessage>();
 
+                //if only route is an agent... persist message and send to endpoint.  the agent will not need
+                //  to perist the message, as it shares the same queue with the sender
+                //otherwise, persist message and thread out the endpoints.
+
                 foreach (MessageTypeMapping m in routes) {
 
                     IEndPoint endPoint = configure.EndPoints.FirstOrDefault(g => g.Key == m.EndPointName).Value;
-
+                    
                     PersistedMessage copied = new PersistedMessage() {
                         PayLoad = msg.PayLoad
                         , Headers = msg.Headers
                         , MessageType = msg.MessageType
-                        , Status = PersistedMessageStatusOptions.ReadyToProcess
+                        , Status = (configure.IHaveAnAgent) ? PersistedMessageStatusOptions.MarkedInProcess : PersistedMessageStatusOptions.ReadyToProcess
                         , Ordinal = id
                         , DateStamp = DateTime.UtcNow
                         , TransactionID = msg.TransactionID
@@ -654,10 +753,23 @@ namespace ShortBus {
 
                 });
 
+                Action whenDoneInProcess = new Action(() => {
+
+                    Guid messageId = messages[0].Id;
+                    string endPointName = routes.First().EndPointName;
+                    Task t = RouteMessageAsync(messageId, endPointName);
+                   
+                     
+                });
+
                 TxRM rm = new TxRM();
 
-                string transactionId = rm.SendMessage(messages, configure.Persitor, whenDone);
-
+                string transactionId = string.Empty;
+                if (configure.IHaveAnAgent) {
+                    transactionId = rm.PersistMessage(messages, configure.Persitor, whenDoneInProcess);
+                } else {
+                    transactionId = rm.PersistMessage(messages, configure.Persitor, whenDone);
+                }
 
                 return transactionId;
 
@@ -671,58 +783,71 @@ namespace ShortBus {
 
         }
 
-        public static void ReceiveMessage(PersistedMessage message) {
+        public static RouteResponse ReceiveMessage(BusMessage message) {
 
             if (stopped || stopping) {
                 throw new BusNotRunningException("Bus has been stopped and cannot accept any new messages");
             }
 
+            RouteResponse toReturn = new RouteResponse() { PayLoad = string.Empty, Status = true };
 
-            List<string> endPointsToTrigger = new List<string>();
-            try {
-                int id = SyncGetPadding();
+            if (message is PersistedMessage) {
+                List<string> endPointsToTrigger = new List<string>();
+                try {
+                    int id = SyncGetPadding();
 
-                var routes = configure.Routes.Where(g => g.TypeName.Equals(message.MessageType, StringComparison.OrdinalIgnoreCase) && g.Direction == MessageDirectionOptions.Outbound);
-                List<PersistedMessage> messages = new List<PersistedMessage>();
+                    var routes = configure.Routes.Where(g => g.TypeName.Equals(message.MessageType, StringComparison.OrdinalIgnoreCase) && g.Direction == MessageDirectionOptions.Outbound);
+                    List<PersistedMessage> messages = new List<PersistedMessage>();
 
-                //persist a copy of the message for each endpoint
-                foreach (MessageTypeMapping m in routes) {
+                    //persist a copy of the message for each endpoint
+                    foreach (MessageTypeMapping m in routes) {
 
-                    IEndPoint endPoint = configure.EndPoints.FirstOrDefault(g => g.Key == m.EndPointName).Value;
-                    if (endPointsToTrigger.Count(g => g.Equals(m.EndPointName, StringComparison.OrdinalIgnoreCase)) == 0) {
-                        endPointsToTrigger.Add(m.EndPointName);
-                    }
-                    PersistedMessage copied = (PersistedMessage)message.Clone();
+                        IEndPoint endPoint = configure.EndPoints.FirstOrDefault(g => g.Key == m.EndPointName).Value;
+                        if (endPointsToTrigger.Count(g => g.Equals(m.EndPointName, StringComparison.OrdinalIgnoreCase)) == 0) {
+                            endPointsToTrigger.Add(m.EndPointName);
+                        }
+                        PersistedMessage copied = (PersistedMessage)((PersistedMessage)message).Clone();
 
-                    copied.Queue = m.EndPointName;
-                    copied.Ordinal = id;
-                    copied.Status = PersistedMessageStatusOptions.ReadyToProcess;
-                    copied.Routes.Add(new Route() {
-                        EndPointType = endPoint.EndPointType
-                        , EndPointName = m.EndPointName
-                        , Routed = DateTime.UtcNow
-                    });
-                    messages.Add(copied);
-                }
-
-                //in other words, if nothing is listening, don't bother persisting.
-                if (messages.Count > 0) {
-                    if (configure.Persitor.ServiceIsDown()) {
-                        throw new ServiceEndpointDownException("Message Peristor is Down");
+                        copied.Queue = m.EndPointName;
+                        copied.Ordinal = id;
+                        copied.Status = PersistedMessageStatusOptions.ReadyToProcess;
+                        copied.Routes.Add(new Route() {
+                            EndPointType = endPoint.EndPointType
+                            , EndPointName = m.EndPointName
+                            , Routed = DateTime.UtcNow
+                        });
+                        messages.Add(copied);
                     }
 
-                    configure.Persitor.Persist(messages);
 
+                    //in other words, if nothing is listening, don't bother persisting.
+                    if (messages.Count > 0) {
+                        if (configure.Persitor.ServiceIsDown()) {
+                            throw new ServiceEndpointDownException("Message Peristor is Down");
+                        }
+
+                        configure.Persitor.Persist(messages);
+
+                    }
+
+
+
+                    StartIn(0, endPointsToTrigger.ToArray(), false);
+
+                } catch {
+                    throw;
                 }
+            } else {
 
+                //we have a control request... respond to that synchronously
+                throw new NotImplementedException("Control messages are coming soon!");
 
-                StartIn(0, endPointsToTrigger.ToArray(), false);
-
-            } catch {
-                throw;
             }
 
+
             
+
+            return toReturn;
 
 
         }
@@ -888,6 +1013,54 @@ namespace ShortBus {
             StopProcessing(threadId);
         }
 
+        private async static Task RouteMessageAsync(Guid messageId, string q) {
+       
+            
+            //get next message to publish
+            PersistedMessage msg = SyncGetMessageToProcess(q, configure.Persitor, messageId);
+            
+            //if we found a message, reset so next thread can look
+            //otherwise, don't reset... this will effectively stop all threads until soemthing else
+            //notifies that there is something to process.
+            if (msg != null) {
+
+                await configure.Persitor.MarkAsync(messageId, PersistedMessageStatusOptions.Processing);
+  
+                //publish message
+                EndPointResponse response = RouteMessage(msg);
+
+                if (!configure.Persitor.ServiceIsDown()) {
+                    try {
+                        if (response.Status) {
+                            //if localstorage experiences an error, it will shut itself down
+                            var popped = configure.Persitor.Pop(messageId);
+                        } else {
+                            if (response.EndPointType == EndPointTypeOptions.Handler) {
+    
+                                    var popped = await configure.Persitor.MarkAsync(messageId, PersistedMessageStatusOptions.Exception);
+                                
+                            } else { //router
+                                //set it back to marked so it will try again
+                                var popped =  await configure.Persitor.MarkAsync(messageId, PersistedMessageStatusOptions.Marked);
+                            }
+                        }
+
+               
+
+                    } catch (Exception) {
+                        //don't need to do anything but stop the process
+                        //the message will be left in a transitory state, but will be retained.
+                    
+                    }
+                }
+
+            } 
+
+
+                    
+ 
+        }
+
         private static string SyncGetNextEndPointWithMessages() {
             string toReturn = null;
             lock (lockObj) {
@@ -1031,7 +1204,34 @@ namespace ShortBus {
             return toReturn;
         }
 
-        
+        private static PersistedMessage SyncGetMessageToProcess(string q, IPersist storage, Guid messageId) {
+
+            PersistedMessage toReturn = null;
+            lock (lockObj) {
+
+                if (!storage.ServiceIsDown()) {
+                    //get the next one from the database
+                    try {
+
+                        if (stopped || stopping) {
+                            toReturn = null;
+                        } else {
+
+                            toReturn = storage.PeekAndMark(q, PersistedMessageStatusOptions.Marked, messageId);
+                        }
+                    } catch (Exception) {
+                        toReturn = null;
+                    }
+
+                } else {
+                    toReturn = null;
+                }
+
+            }
+            return toReturn;
+        }
+
+
 
     }
 }

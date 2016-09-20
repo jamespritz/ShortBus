@@ -17,13 +17,13 @@ namespace SubscriberDemo.Handlers {
 
 
             TestMessage m = JsonConvert.DeserializeObject<TestMessage>(message.PayLoad);
-            if (message.RetryCount == 0) {
-                Console.WriteLine("Recieved {0}, rescheduling", m.Property);
-                return HandlerResponse.Retry(TimeSpan.FromMinutes(1));
-            } else {
+            //if (message.RetryCount == 0) {
+            //    Console.WriteLine("Recieved {0}, rescheduling", m.Property);
+            //    return HandlerResponse.Retry(TimeSpan.FromMinutes(1));
+            //} else {
                 Console.WriteLine("processing {0}", m.Property);
                 return HandlerResponse.Handled();
-            }
+            //}
   
           
         }

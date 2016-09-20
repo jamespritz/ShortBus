@@ -1,4 +1,7 @@
-﻿using ShortBus.Persistence;
+﻿using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using ShortBus.EndPoint;
+using ShortBus.Persistence;
 using ShortBus.Publish;
 using ShortBus.Routing;
 using System;
@@ -16,8 +19,8 @@ namespace ShortBus.Hosting.WebAPI {
 
             RouteResponse toReturn = new RouteResponse() { Status = false };
             try {
-                Bus.ReceiveMessage(message);
-                toReturn.Status = true;
+                toReturn = Bus.ReceiveMessage(message);
+                
 
             } catch {
                 
@@ -28,8 +31,28 @@ namespace ShortBus.Hosting.WebAPI {
         }
 
         [HttpGet]
-        public string GetMessage(int id) {
-            return "hello";
+        public RouteResponse CC(ControlCommand command) {
+
+            //serialize message
+            string serialized = JsonConvert.SerializeObject(command, new JsonSerializerSettings() { TypeNameHandling = TypeNameHandling.All });
+            JObject asJO = JObject.Parse(serialized);
+            
+
+
+            //create peristed message
+            BusMessage msg = new BusMessage() { PayLoad = serialized, MessageType = asJO["$type"].ToString() };
+
+
+            RouteResponse toReturn = new RouteResponse() { Status = false };
+
+            try {
+                toReturn = Bus.ReceiveMessage(msg);   
+            } catch {
+                throw;
+            }
+
+            return toReturn;
+
         }
 
     }

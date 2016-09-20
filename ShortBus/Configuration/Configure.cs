@@ -25,6 +25,8 @@ namespace ShortBus.Configuration {
 
         string ApplicationGUID { get; }
 
+        bool IHaveAnAgent { get; }
+
         IConfigure SetApplicationName(string appName);
         IConfigure SetApplicationGUID(string appGUID);
 
@@ -59,6 +61,7 @@ namespace ShortBus.Configuration {
         private string applicationName = string.Empty;
         private string appGUID = string.Empty;
         private int maxThreads = 1;
+        private bool iHaveAnAgent = false;
 
         internal EndPoint myEndPoint { get; set; }
         internal IPeristProvider storageProvider { get; set; }
@@ -114,6 +117,14 @@ namespace ShortBus.Configuration {
 
             return (IConfigure)this;
         }
+
+        public bool IHaveAnAgent {
+            get {
+                return this.iHaveAnAgent;
+            }
+        }
+        
+
         public string ApplicationName {
             get {
 
@@ -186,6 +197,9 @@ namespace ShortBus.Configuration {
 
         IConfigure IConfigure.RegisterEndpoint(string endPointName, IEndPoint endPoint) {
 
+            if (endPoint.EndPointType == EndPointTypeOptions.Agent) {
+                this.iHaveAnAgent = true;
+            }
             this.EndPoints.TryAdd(endPointName, endPoint);
 
             return (IConfigure)this;
@@ -218,6 +232,9 @@ namespace ShortBus.Configuration {
 
             bool hasEndpoints = ((this.EndPoints != null) && this.EndPoints.Count() > 0);
    
+            if (iHaveAnAgent && hasEndpoints && this.EndPoints.Count() > 1) {
+                throw new BusNotConfiguredException("Agent", "If an agent is referenced, than no other endpoints can exist");
+            }
 
             //if (!hasEndpoints) { 
             //    throw new BusNotConfiguredException("Endpoint", "No Message Endpoints have been added");

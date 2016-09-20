@@ -284,7 +284,7 @@ namespace Sandbox {
 
             Bus.Configure
              .PersistTo(new MongoPersistProvider(@"mongodb://127.0.0.1:27017", MongoDataBaseName.UseExisting("ShortBus")))
-             .MaxThreads(4)
+             .MaxThreads(1)
              
              .MyEndPoint(new ShortBus.Configuration.EndPoint() {
                  EndPointAddress = @"http://localhost:9872"
@@ -292,24 +292,50 @@ namespace Sandbox {
                  , Name = Bus.ApplicationName
              })
 
-             .RegisterEndpoint("Default", new RESTEndPoint(new RESTSettings(@"http://localhost:9876", ShortBus.Publish.EndPointTypeOptions.Publisher)))
+             .RegisterEndpoint("Default", new RESTEndPoint(new RESTSettings(@"http://localhost:9873", ShortBus.Publish.EndPointTypeOptions.Agent)))
              .RouteMessage<ShortBus.TestMessage>("Default", false);
-             
-            
 
             Bus.OnStarted += onStarted;
             Bus.OnProcessing += onProcessing;
             Bus.OnStalled += onStalled;
             Bus.OnThreadStarted += onThreadStarted;
             Bus.Start();
+            //Bus.SendMessageDirect<TestMessage>(new TestMessage() { Property = string.Format("Thread {0}, Iteration {1}", 0, 0) });
 
-            messageSendTimer.AutoReset = false;
-            messageSendTimer.Enabled = true;
-            messageSendTimer.Interval = 1000;
-            messageSendTimer.Elapsed += MessageSendTimer_Elapsed;
-            messageSendTimer.Start();
+            for (int i = 1; i <= 4; i++) {
 
-            Console.WriteLine("Press any key to stop: ");
+                Task t = null;
+                if (t == null || t.IsCompleted) {
+                    //t = new Thread(PublishNext);
+
+                    //capture i during the loop, since publishnext is running from the facotry, it may begin
+                    //after i has been incremeneted.
+                    int q = i;
+
+                    t = Task.Run(() => {
+                        for (int g = 1; g <= 5; g++) {
+                            Bus.SendMessage<TestMessage>(new TestMessage() { Property = string.Format("Thread {0}, Iteration {1}", q, g) });
+                        }
+                        Console.WriteLine("Done {0}", q);
+                    });
+
+
+                }
+
+
+
+            }
+
+
+
+
+                //messageSendTimer.AutoReset = false;
+                //messageSendTimer.Enabled = true;
+                //messageSendTimer.Interval = 1000;
+                //messageSendTimer.Elapsed += MessageSendTimer_Elapsed;
+                //messageSendTimer.Start();
+
+                Console.WriteLine("Press any key to stop: ");
             Console.ReadKey();
 
 

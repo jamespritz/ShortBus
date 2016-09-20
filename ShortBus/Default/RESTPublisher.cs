@@ -40,11 +40,6 @@ namespace ShortBus.Default {
         }
 
 
-
-        RouteResponse IMessageRouter.HelloWorld(PersistedMessage message) {
-            return this.Post(message, "HelloWorld");
-        }
-
         RouteResponse IMessageRouter.Publish(PersistedMessage message) {
 
             return this.Post(message, "PostMessage");

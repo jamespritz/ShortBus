@@ -42,6 +42,11 @@ namespace ShortBus.Persistence {
         Task<PersistedMessage> PeekAndMarkNextAsync(string q, PersistedMessageStatusOptions mark);
         Task<PersistedMessage> PeekAndMarkNextAsync(string q, PersistedMessageStatusOptions mark, CancellationToken token);
 
+        PersistedMessage PeekAndMark(string q, PersistedMessageStatusOptions mark, Guid messageId);
+        Task<PersistedMessage> PeekAndMarkAsync(string q, PersistedMessageStatusOptions mark, Guid messageid);
+        Task<PersistedMessage> PeekAndMarkAsync(string q, PersistedMessageStatusOptions mark, CancellationToken token, Guid messageId);
+
+
         PersistedMessage Mark(Guid id, PersistedMessageStatusOptions mark);
         Task<PersistedMessage> MarkAsync(Guid id, PersistedMessageStatusOptions mark);
         Task<PersistedMessage> MarkAsync(Guid id, PersistedMessageStatusOptions mark, CancellationToken token);

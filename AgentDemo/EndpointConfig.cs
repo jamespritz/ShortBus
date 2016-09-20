@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using ShortBusService.Configuration;
 using ShortBus.Default;
 
-namespace PublisherDemo {
+namespace AgentDemo {
     public class EndpointConfig : ShortBusService.Configuration.IServiceConfig {
 
         string endPointAddress = System.Configuration.ConfigurationManager.AppSettings["endPointAddress"];
@@ -23,11 +23,14 @@ namespace PublisherDemo {
                 .PersistTo(new MongoPersistProvider(mongoAddress, MongoDataBaseName.UseExisting("ShortBus")))
                 .MyEndPoint(new ShortBus.Configuration.EndPoint() {
                     EndPointAddress = endPointAddress
-                     , EndPointType = ShortBus.Publish.EndPointTypeOptions.Publisher
+                     , EndPointType = ShortBus.Publish.EndPointTypeOptions.Agent
                      , Name = ShortBus.Bus.ApplicationName
                 })
-                .MaxThreads(4);
-                
+                .MaxThreads(4)
+                .RegisterEndpoint("Default", new RESTEndPoint(new RESTSettings(@"http://localhost:9876", ShortBus.Publish.EndPointTypeOptions.Publisher)))
+                .RouteMessage<ShortBus.TestMessage>("Default", false);
+
+
         }
     }
 }

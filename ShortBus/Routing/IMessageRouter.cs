@@ -23,9 +23,6 @@ namespace ShortBus.Routing {
         RouteResponse Publish(PersistedMessage message);
 
 
-        //Called by the bus to Test if publisher endpoint is up.
-        RouteResponse HelloWorld(PersistedMessage message);
-
         /// <summary>
         /// The Bus will query this property before initiating any requests, and handle gracefully.
         /// Implementation should maintain this flag and wait for a reset request.
